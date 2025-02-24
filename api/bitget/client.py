@@ -68,3 +68,4 @@ class BitgetClient(BaseAPIClient):
                 if data['code'] == '00000' and data['data']:
                     return float(data['data'][0]['lastPr'])
                 raise Exception(f"Failed to get futures price: {data['msg']}") 
+            
