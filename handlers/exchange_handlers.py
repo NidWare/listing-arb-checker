@@ -83,26 +83,31 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
     return sorted(opportunities, key=lambda x: x['percentage'], reverse=True)
 
 def format_price_comparison(prices: Dict[str, Dict[str, Optional[float]]], symbol: str) -> str:
-    """Format price comparison table"""
+    """Format price comparison table with better alignment"""
     result = [f"💰 Price Comparison for {symbol}:"]
     
-    # Header
-    result.append("\n┌─────────┬────────────┬────────────┐")
-    result.append("│ Exchange│    SPOT    │  FUTURES   │")
-    result.append("├─────────┼────────────┼────────────┤")
+    # Calculate maximum widths for better alignment
+    exchange_width = 9  # Fixed width for exchange column
+    price_width = 12    # Fixed width for price columns
+    
+    # Header with better spacing
+    result.append("\n┌───────────┬──────────────┬──────────────┐")
+    result.append("│ Exchange  │     SPOT     │   FUTURES    │")
+    result.append("├───────────┼──────────────┼──────────────┤")
     
     for exchange in prices:
-        spot_price = f"${prices[exchange]['spot']:.2f}" if prices[exchange]['spot'] else "N/A"
-        futures_price = f"${prices[exchange]['futures']:.2f}" if prices[exchange]['futures'] else "N/A"
+        # Format prices with consistent decimal places and padding
+        spot_price = f"${prices[exchange]['spot']:.3f}" if prices[exchange]['spot'] else "N/A"
+        futures_price = f"${prices[exchange]['futures']:.3f}" if prices[exchange]['futures'] else "N/A"
         
-        # Pad exchange name and prices for alignment
-        exchange_pad = exchange.ljust(7)
-        spot_pad = spot_price.ljust(10)
-        futures_pad = futures_price.ljust(10)
+        # Center-align exchange name and right-align prices
+        exchange_formatted = f" {exchange.upper():8} "  # 8 chars + 2 spaces
+        spot_formatted = f" {spot_price:>10} "      # 10 chars + 2 spaces
+        futures_formatted = f" {futures_price:>10} "  # 10 chars + 2 spaces
         
-        result.append(f"│ {exchange_pad}│ {spot_pad}│ {futures_pad}│")
+        result.append(f"│{exchange_formatted}│{spot_formatted}│{futures_formatted}│")
     
-    result.append("└─────────┴────────────┴────────────┘")
+    result.append("└───────────┴──────────────┴──────────────┘")
     return "\n".join(result)
 
 def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
