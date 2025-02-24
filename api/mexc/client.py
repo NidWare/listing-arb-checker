@@ -122,7 +122,7 @@ class MexcClient(BaseAPIClient):
             logger.error(f"Error fetching spot ticker: {str(e)}")
             return None
 
-    async def get_futures_ticker(self, symbol: str) -> Dict[str, Any]:
+    async def get_futures_price(self, symbol: str) -> Dict[str, Any]:
         """Get futures market ticker including both market price and index price"""
         await self.ensure_session()
         # Get market price
