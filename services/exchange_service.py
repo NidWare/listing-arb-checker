@@ -181,7 +181,7 @@ class ExchangeService:
                 elif exchange == "gate":
                     ticker = await exchange_client.get_spot_price(symbol)
                 elif exchange == "bitget":
-                    ticker = await exchange_client.get_spot_ticker(symbol)
+                    ticker = await exchange_client.get_spot_price(symbol)
             return ticker
             
         except Exception as e:

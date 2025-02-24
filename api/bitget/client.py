@@ -24,4 +24,24 @@ class BitgetClient(BaseAPIClient):
             url = f"{self.BASE_URL}/coins"
             params = {'symbol': symbol}
             async with session.get(url, params=params) as response:
-                return await response.json() 
+                return await response.json()
+
+    async def get_spot_price(self, symbol: str) -> float:
+        """
+        Get the current spot price for a given symbol.
+        
+        Args:
+            symbol: The trading symbol without USDT suffix (e.g., 'BTC' for BTCUSDT)
+            
+        Returns:
+            float: The current spot price
+        """
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.bitget.com/api/v2/spot/market/tickers"
+            params = {'symbol': f"{symbol}USDT"}
+            
+            async with session.get(url, params=params) as response:
+                data = await response.json()
+                if data['code'] == '00000' and data['data']:
+                    return float(data['data'][0]['lastPr'])
+                raise Exception(f"Failed to get spot price: {data['msg']}") 
