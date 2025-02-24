@@ -169,7 +169,7 @@ class ExchangeService:
             if market_type == "futures":
                 # Use futures market endpoints
                 if exchange == "mexc":
-                    ticker = await exchange_client.get_futures_ticker(symbol)
+                    ticker = await exchange_client.get_futures_price(symbol)
                 elif exchange == "gate":
                     ticker = await exchange_client.get_futures_price(symbol)
                 elif exchange == "bitget":
@@ -177,7 +177,7 @@ class ExchangeService:
             else:
                 # Use spot market endpoints
                 if exchange == "mexc":
-                    ticker = await exchange_client.get_spot_ticker(symbol)
+                    ticker = await exchange_client.get_spot_price(symbol)
                 elif exchange == "gate":
                     ticker = await exchange_client.get_spot_price(symbol)
                 elif exchange == "bitget":

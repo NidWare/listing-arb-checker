@@ -124,4 +124,25 @@ class MexcClient(BaseAPIClient):
             logger.error(f"Error fetching futures ticker: {str(e)}")
             return None
 
+    async def get_spot_price(self, symbol: str) -> float:
+        """
+        Get spot market price for a symbol paired with USDT.
+        
+        Args:
+            symbol: Base currency symbol (e.g. 'BTC' for BTCUSDT pair)
+            
+        Returns:
+            float: Current price of the symbol
+        """
+        symbol = f"{symbol}USDT"
+        url = f"{self.base_url}/avgPrice"
+        params = {"symbol": symbol}
+        
+        try:
+            response = await self.make_request('GET', url, params=params)
+            data = await response.json()
+            return float(data["price"])
+        except Exception as e:
+            logger.error(f"Error fetching spot price for {symbol}: {str(e)}")
+            return None
     # Add other async methods as needed 
