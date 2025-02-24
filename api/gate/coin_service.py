@@ -27,4 +27,4 @@ class GateCoinService(BaseCoinService):
                 f"Withdraw Disabled: {network.get('is_withdraw_disabled')}"
             ])
             
-        return "\n".join(output) 
+        return "\n".join(output)

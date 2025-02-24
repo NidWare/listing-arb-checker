@@ -182,8 +182,7 @@ class ExchangeService:
                     ticker = await exchange_client.get_spot_price(symbol)
                 elif exchange == "bitget":
                     ticker = await exchange_client.get_spot_ticker(symbol)
-                
-            return round(float(ticker['last']), 4) if ticker and 'last' in ticker else None
+            return ticker
             
         except Exception as e:
             logger.error(f"Error getting {market_type} price from {exchange}: {str(e)}")
