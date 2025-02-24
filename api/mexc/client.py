@@ -122,8 +122,16 @@ class MexcClient(BaseAPIClient):
             logger.error(f"Error fetching spot ticker: {str(e)}")
             return None
 
-    async def get_futures_price(self, symbol: str) -> Dict[str, Any]:
-        """Get futures market ticker including both market price and index price"""
+    async def get_futures_price(self, symbol: str) -> float:
+        """
+        Get futures index price for a symbol.
+        
+        Args:
+            symbol: Trading pair symbol (e.g. 'BTCUSDT')
+            
+        Returns:
+            float: Current index price of the symbol
+        """
         await self.ensure_session()
         
         try:
@@ -139,11 +147,7 @@ class MexcClient(BaseAPIClient):
                     logger.error(f"Failed to get index price: {index_data}")
                     return None
                     
-                return {
-                    "index_price": index_data["data"]["indexPrice"] if "data" in index_data else None,
-                    "timestamp": index_data["data"]["timestamp"] if "data" in index_data else None,
-                    "symbol": index_data["data"]["symbol"] if "data" in index_data else None
-                }
+                return float(index_data["data"]["indexPrice"]) if "data" in index_data else None
         except Exception as e:
             logger.error(f"Error fetching futures price: {str(e)}")
             return None
