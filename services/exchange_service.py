@@ -80,11 +80,6 @@ class ExchangeService:
                         for coin in coins:  # Removed limit
                             result += (
                                 f"• Symbol: {coin['symbol']}\n"
-                                f"  Base Currency: {coin['baseCoin']}\n"
-                                f"  Quote Currency: {coin['quoteCoin']}\n"
-                                f"  Min Order Size: {coin['minTradeAmount']}\n"
-                                f"  Price Precision: {coin['pricePrecision']}\n"
-                                f"  Quantity Precision: {coin['quantityPrecision']}\n"
                                 "-------------------\n"
                             )
                         return result
@@ -106,13 +101,6 @@ class ExchangeService:
                                 f"• Trading Pair: {coin['id']}\n"
                                 f"  Base: {coin['base']}\n"
                                 f"  Quote: {coin['quote']}\n"
-                                f"  Fee: {coin['fee']}\n"
-                                f"  Min Base Amount: {coin['min_base_amount']}\n"
-                                f"  Min Quote Amount: {coin['min_quote_amount']}\n"
-                                f"  Amount Precision: {coin['amount_precision']}\n"
-                                f"  Precision: {coin['precision']}\n"
-                                f"  Trade Status: {coin['trade_status']}\n"
-                                "-------------------\n"
                             )
                         return result
         except Exception as e:

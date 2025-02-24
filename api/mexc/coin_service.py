@@ -20,10 +20,5 @@ class MexcCoinService(BaseCoinService):
             return "Coin not found in the response"
 
         output = [f"\nCoin Details:", f"Coin: {coin.get('Name', coin.get('coin'))}"]
-        output.append("\nNetwork Information:")
-        
-        for network in coin.get("networkList", []):
-            output.append("\nNetwork Details:")
-            output.extend([f"{key}: {value}" for key, value in network.items()])
             
         return "\n".join(output) 
