@@ -149,36 +149,36 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
     
     result = ["\n📈 Arbitrage Opportunities:\n"]
     result.append("<pre>")
-    result.append("Type     From → To         Spread   Profit")
+    result.append("Type     Exchange Route      Spread  Profit")
     result.append("──────────────────────────────────────────")
     
     for opp in opportunities:
         if opp['type'] == 'cross_exchange_spot':
             profit = opp['spread'] * 100  # Example calculation, adjust as needed
+            route = f"{opp['exchange1'].upper():<5} → {opp['exchange2'].upper():<5}"
             result.append(
-                f"SPOT     {opp['exchange1'].upper():<5} → {opp['exchange2'].upper():<5}"
-                f" {opp['percentage']:>6.1f}% ${profit:>6.2f}"
+                f"SPOT     {route:<15} {opp['percentage']:>5.1f}% ${profit:>6.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_futures':
             profit = opp['spread'] * 100  # Example calculation, adjust as needed
+            route = f"{opp['exchange1'].upper():<5} → {opp['exchange2'].upper():<5}"
             result.append(
-                f"FUTURES  {opp['exchange1'].upper():<5} → {opp['exchange2'].upper():<5}"
-                f" {opp['percentage']:>6.1f}% ${profit:>6.2f}"
+                f"FUTURES  {route:<15} {opp['percentage']:>5.1f}% ${profit:>6.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_spot_futures':
             profit = opp['spread'] * 100  # Example calculation, adjust as needed
+            route = f"{opp['spot_exchange'].upper():<5} → {opp['futures_exchange'].upper():<5}"
             result.append(
-                f"CROSS    {opp['spot_exchange'].upper():<5} → {opp['futures_exchange'].upper():<5}"
-                f" {opp['percentage']:>6.1f}% ${profit:>6.2f}"
+                f"CROSS    {route:<15} {opp['percentage']:>5.1f}% ${profit:>6.2f}"
             )
         
         else:  # same_exchange_spot_futures
             profit = opp['spread'] * 100  # Example calculation, adjust as needed
+            route = f"{opp['exchange'].upper():<15}"
             result.append(
-                f"SPOTFUT  {opp['exchange'].upper():<11}"
-                f" {opp['percentage']:>6.1f}% ${profit:>6.2f}"
+                f"SPOTFUT  {route:<15} {opp['percentage']:>5.1f}% ${profit:>6.2f}"
             )
     
     result.append("</pre>")
