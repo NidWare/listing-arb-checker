@@ -17,6 +17,19 @@ class MexcClient(BaseAPIClient):
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = "https://api.mexc.com/api/v3"
+        self.session = None
+
+    async def __aenter__(self):
+        self.session = aiohttp.ClientSession()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.session:
+            await self.session.close()
+            
+    async def ensure_session(self):
+        if self.session is None:
+            self.session = aiohttp.ClientSession()
 
     def generate_signature(self, params: str) -> str:
         return hmac.new(
@@ -109,8 +122,9 @@ class MexcClient(BaseAPIClient):
             logger.error(f"Error fetching spot ticker: {str(e)}")
             return None
 
-    async def get_futures_price(self, symbol: str) -> Dict[str, Any]:
+    async def get_futures_ticker(self, symbol: str) -> Dict[str, Any]:
         """Get futures market ticker including both market price and index price"""
+        await self.ensure_session()
         # Get market price
         url = f"{self.base_url}/ticker/price"
         params = {"symbol": symbol}
