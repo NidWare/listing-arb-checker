@@ -149,7 +149,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
     
     result = ["\n📈 Arbitrage Opportunities:\n"]
     result.append("<pre>")
-    result.append("Type     Exchange Route      Spread  Profit")
+    result.append("Type     Exchange Route      Spread   Profit")
     result.append("──────────────────────────────────────────")
     
     for opp in opportunities:
@@ -159,7 +159,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             ex2 = f"{opp['exchange2'].upper():6}"
             route = f"{ex1}→ {ex2}"
             result.append(
-                f"SPOT     {route:<15} {opp['percentage']:>5.1f}% ${profit:>6.2f}"
+                f"SPOT     {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_futures':
@@ -168,7 +168,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             ex2 = f"{opp['exchange2'].upper():6}"
             route = f"{ex1}→ {ex2}"
             result.append(
-                f"FUTURES  {route:<15} {opp['percentage']:>5.1f}% ${profit:>6.2f}"
+                f"FUTURES  {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_spot_futures':
@@ -176,15 +176,20 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             ex1 = f"{opp['spot_exchange'].upper():6}"
             ex2 = f"{opp['futures_exchange'].upper():6}"
             route = f"{ex1}→ {ex2}"
+            # Determine if it's spot→futures or futures→spot based on prices
+            if opp['spot_price'] < opp['futures_price']:
+                cross_type = "S→F"  # spot to futures
+            else:
+                cross_type = "F→S"  # futures to spot
             result.append(
-                f"CROSS    {route:<15} {opp['percentage']:>5.1f}% ${profit:>6.2f}"
+                f"CROSS{cross_type:<3} {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
         
         else:  # same_exchange_spot_futures
             profit = opp['spread'] * 100  # Example calculation, adjust as needed
             route = f"{opp['exchange'].upper():15}"
             result.append(
-                f"SPOTFUT  {route:<15} {opp['percentage']:>5.1f}% ${profit:>6.2f}"
+                f"SPOTFUT  {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
     
     result.append("</pre>")
