@@ -40,7 +40,7 @@ async def handle_search(message: Message):
                         spot_price = await exchange_service.get_average_price(exchange, query, market_type="spot")
                         futures_price = await exchange_service.get_average_price(exchange, query, market_type="futures")
                         
-                        price_info = "\n📊 Market Prices (5min avg):"
+                        price_info = "\n📊 Market Prices:"
                         if spot_price:
                             price_info += f"\n• SPOT: ${spot_price}"
                         if futures_price:
