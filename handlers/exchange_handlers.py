@@ -21,18 +21,40 @@ async def cmd_start(message: Message):
     )
 
 def format_price_comparison(prices: Dict[str, Dict[str, Optional[float]]], symbol: str) -> str:
-    """Format price comparison with arrows instead of table"""
-    result = [f"💰 Price Comparison for {symbol}:"]
+    """Format price comparison in monospace table format"""
+    result = [f"💰 Price Comparison for {symbol}:\n"]
     
-    # Format each exchange's prices with arrows
+    # Header with monospace formatting
+    result.append(f"<pre>")
+    result.append(f"Exchange  Market   Price    Spread")
+    result.append(f"──────────────────────────────────")
+    
+    # Format each exchange's prices
     for exchange in prices:
-        spot_price = f"${prices[exchange]['spot']:.4f}" if prices[exchange]['spot'] else "N/A"
-        futures_price = f"${prices[exchange]['futures']:.4f}" if prices[exchange]['futures'] else "N/A"
+        spot_price = prices[exchange]['spot']
+        futures_price = prices[exchange]['futures']
         
-        result.append(f"\n{exchange.upper()}")
-        result.append(f"SPOT ➡️ {spot_price}")
-        result.append(f"FUTURES ➡️ {futures_price}")
+        # Calculate spread percentage between spot and futures
+        if spot_price and futures_price:
+            spread = abs(spot_price - futures_price)
+            spread_pct = (spread / min(spot_price, futures_price)) * 100
+            spread_str = f"{spread_pct:.1f}%"
+        else:
+            spread_str = "N/A"
+        
+        # Format SPOT line
+        if spot_price:
+            result.append(
+                f"{exchange.upper():<8} SPOT    ${spot_price:<7.4f} {spread_str:<6}"
+            )
+        
+        # Format FUTURES line
+        if futures_price:
+            result.append(
+                f"{exchange.upper():<8} FUTURES ${futures_price:<7.4f} {spread_str:<6}"
+            )
     
+    result.append("</pre>")
     return "\n".join(result)
 
 async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> List[Dict]:
@@ -121,46 +143,45 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
     return sorted(opportunities, key=lambda x: x['percentage'], reverse=True)
 
 def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
-    """Format arbitrage opportunities with improved clarity"""
+    """Format arbitrage opportunities in monospace table format"""
     if not opportunities:
         return "\n🤔 No significant arbitrage opportunities found"
     
-    result = ["\n📈 Arbitrage Opportunities:"]
+    result = ["\n📈 Arbitrage Opportunities:\n"]
+    result.append("<pre>")
+    result.append("Type     From → To         Spread   Profit")
+    result.append("──────────────────────────────────────────")
     
     for opp in opportunities:
         if opp['type'] == 'cross_exchange_spot':
+            profit = opp['spread'] * 100  # Example calculation, adjust as needed
             result.append(
-                f"\n🔄 SPOT Market Arbitrage:"
-                f"\n• Buy on {opp['exchange1'].upper()} at ${opp['price1']:.4f}"
-                f"\n• Sell on {opp['exchange2'].upper()} at ${opp['price2']:.4f}"
-                f"\n• Spread: ${opp['spread']:.4f} ({opp['percentage']:.2f}%)"
-                f"\n• Route: {opp['exchange1'].upper()} ➡️ {opp['exchange2'].upper()}"
+                f"SPOT     {opp['exchange1'].upper():<5} → {opp['exchange2'].upper():<5}"
+                f" {opp['percentage']:>6.1f}% ${profit:>6.2f}"
             )
+        
         elif opp['type'] == 'cross_exchange_futures':
+            profit = opp['spread'] * 100  # Example calculation, adjust as needed
             result.append(
-                f"\n🔄 FUTURES Market Arbitrage:"
-                f"\n• Buy on {opp['exchange1'].upper()} at ${opp['price1']:.4f}"
-                f"\n• Sell on {opp['exchange2'].upper()} at ${opp['price2']:.4f}"
-                f"\n• Spread: ${opp['spread']:.4f} ({opp['percentage']:.2f}%)"
-                f"\n• Route: {opp['exchange1'].upper()} ➡️ {opp['exchange2'].upper()}"
+                f"FUTURES  {opp['exchange1'].upper():<5} → {opp['exchange2'].upper():<5}"
+                f" {opp['percentage']:>6.1f}% ${profit:>6.2f}"
             )
+        
         elif opp['type'] == 'cross_exchange_spot_futures':
+            profit = opp['spread'] * 100  # Example calculation, adjust as needed
             result.append(
-                f"\n🔄 Cross-Exchange SPOT-FUTURES:"
-                f"\n• Buy SPOT on {opp['spot_exchange'].upper()} at ${opp['spot_price']:.4f}"
-                f"\n• Sell FUTURES on {opp['futures_exchange'].upper()} at ${opp['futures_price']:.4f}"
-                f"\n• Spread: ${opp['spread']:.4f} ({opp['percentage']:.2f}%)"
-                f"\n• Route: {opp['spot_exchange'].upper()} SPOT ➡️ {opp['futures_exchange'].upper()} FUTURES"
+                f"CROSS    {opp['spot_exchange'].upper():<5} → {opp['futures_exchange'].upper():<5}"
+                f" {opp['percentage']:>6.1f}% ${profit:>6.2f}"
             )
+        
         else:  # same_exchange_spot_futures
+            profit = opp['spread'] * 100  # Example calculation, adjust as needed
             result.append(
-                f"\n📊 {opp['exchange'].upper()} SPOT-FUTURES:"
-                f"\n• SPOT: ${opp['spot_price']:.4f}"
-                f"\n• FUTURES: ${opp['futures_price']:.4f}"
-                f"\n• Spread: ${opp['spread']:.4f} ({opp['percentage']:.2f}%)"
+                f"SPOTFUT  {opp['exchange'].upper():<11}"
+                f" {opp['percentage']:>6.1f}% ${profit:>6.2f}"
             )
-        result.append("")  # Add empty line between opportunities
     
+    result.append("</pre>")
     return "\n".join(result)
 
 @router.message()
@@ -207,10 +228,10 @@ async def handle_search(message: Message):
             format_price_comparison(prices, query),
             format_arbitrage_opportunities(opportunities),
             "\n💡 Tips:",
-            "• Always check transfer fees before executing trades",
-            "• Market prices may change quickly",
-            "• Consider exchange trading fees",
-            "• Verify withdrawal/deposit status on each exchange"
+            "• Check transfer fees and limits",
+            "• Verify market liquidity",
+            "• Monitor price changes",
+            "• Consider trading fees"
         ]
         
         # Update status message with results
