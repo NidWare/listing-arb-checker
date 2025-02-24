@@ -20,118 +20,144 @@ async def cmd_start(message: Message):
         "Example: 'BTC' or 'ETH'"
     )
 
+def format_price_comparison(prices: Dict[str, Dict[str, Optional[float]]], symbol: str) -> str:
+    """Format price comparison with arrows instead of table"""
+    result = [f"💰 Price Comparison for {symbol}:"]
+    
+    # Format each exchange's prices with arrows
+    for exchange in prices:
+        spot_price = f"${prices[exchange]['spot']:.4f}" if prices[exchange]['spot'] else "N/A"
+        futures_price = f"${prices[exchange]['futures']:.4f}" if prices[exchange]['futures'] else "N/A"
+        
+        result.append(f"\n{exchange.upper()}")
+        result.append(f"SPOT ➡️ {spot_price}")
+        result.append(f"FUTURES ➡️ {futures_price}")
+    
+    return "\n".join(result)
+
 async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> List[Dict]:
-    """Calculate arbitrage opportunities between exchanges"""
+    """Calculate all possible arbitrage opportunities between exchanges"""
     opportunities = []
     exchanges = list(prices.keys())
     
+    # Helper function to calculate percentage difference
+    def calc_percentage(price1: float, price2: float) -> float:
+        return abs(price1 - price2) / min(price1, price2) * 100
+    
+    # Compare all possible combinations
     for i in range(len(exchanges)):
-        for j in range(i + 1, len(exchanges)):
-            ex1, ex2 = exchanges[i], exchanges[j]
-            
-            # Compare SPOT prices
-            if prices[ex1]['spot'] and prices[ex2]['spot']:
-                price1, price2 = prices[ex1]['spot'], prices[ex2]['spot']
-                spread = abs(price1 - price2)
-                percentage = (spread / min(price1, price2)) * 100
+        for j in range(len(exchanges)):
+            if i != j:  # Compare different exchanges
+                ex1, ex2 = exchanges[i], exchanges[j]
                 
-                if percentage >= 0.5:  # Only show opportunities with >0.5% difference
-                    opportunities.append({
-                        'type': 'spot',
-                        'exchange1': ex1,
-                        'exchange2': ex2,
-                        'price1': price1,
-                        'price2': price2,
-                        'spread': spread,
-                        'percentage': percentage
-                    })
-            
-            # Compare FUTURES prices
-            if prices[ex1]['futures'] and prices[ex2]['futures']:
-                price1, price2 = prices[ex1]['futures'], prices[ex2]['futures']
-                spread = abs(price1 - price2)
-                percentage = (spread / min(price1, price2)) * 100
-                
-                if percentage >= 0.5:
-                    opportunities.append({
-                        'type': 'futures',
-                        'exchange1': ex1,
-                        'exchange2': ex2,
-                        'price1': price1,
-                        'price2': price2,
-                        'spread': spread,
-                        'percentage': percentage
-                    })
-            
-            # Compare SPOT vs FUTURES within same exchange
-            for ex in [ex1, ex2]:
-                if prices[ex]['spot'] and prices[ex]['futures']:
-                    spot, futures = prices[ex]['spot'], prices[ex]['futures']
-                    spread = abs(spot - futures)
-                    percentage = (spread / min(spot, futures)) * 100
+                # SPOT to SPOT between exchanges
+                if prices[ex1]['spot'] and prices[ex2]['spot']:
+                    price1, price2 = prices[ex1]['spot'], prices[ex2]['spot']
+                    spread = abs(price1 - price2)
+                    percentage = calc_percentage(price1, price2)
                     
-                    if percentage >= 0.5:
+                    if percentage >= 0.1:  # Lower threshold to show more opportunities
                         opportunities.append({
-                            'type': 'spot_futures',
-                            'exchange': ex,
-                            'spot_price': spot,
-                            'futures_price': futures,
+                            'type': 'cross_exchange_spot',
+                            'exchange1': ex1,
+                            'exchange2': ex2,
+                            'price1': price1,
+                            'price2': price2,
+                            'spread': spread,
+                            'percentage': percentage
+                        })
+                
+                # FUTURES to FUTURES between exchanges
+                if prices[ex1]['futures'] and prices[ex2]['futures']:
+                    price1, price2 = prices[ex1]['futures'], prices[ex2]['futures']
+                    spread = abs(price1 - price2)
+                    percentage = calc_percentage(price1, price2)
+                    
+                    if percentage >= 0.1:
+                        opportunities.append({
+                            'type': 'cross_exchange_futures',
+                            'exchange1': ex1,
+                            'exchange2': ex2,
+                            'price1': price1,
+                            'price2': price2,
+                            'spread': spread,
+                            'percentage': percentage
+                        })
+                
+                # SPOT to FUTURES between different exchanges
+                if prices[ex1]['spot'] and prices[ex2]['futures']:
+                    price1, price2 = prices[ex1]['spot'], prices[ex2]['futures']
+                    spread = abs(price1 - price2)
+                    percentage = calc_percentage(price1, price2)
+                    
+                    if percentage >= 0.1:
+                        opportunities.append({
+                            'type': 'cross_exchange_spot_futures',
+                            'spot_exchange': ex1,
+                            'futures_exchange': ex2,
+                            'spot_price': price1,
+                            'futures_price': price2,
                             'spread': spread,
                             'percentage': percentage
                         })
     
+    # Within same exchange SPOT vs FUTURES
+    for ex in exchanges:
+        if prices[ex]['spot'] and prices[ex]['futures']:
+            spot, futures = prices[ex]['spot'], prices[ex]['futures']
+            spread = abs(spot - futures)
+            percentage = calc_percentage(spot, futures)
+            
+            if percentage >= 0.1:
+                opportunities.append({
+                    'type': 'same_exchange_spot_futures',
+                    'exchange': ex,
+                    'spot_price': spot,
+                    'futures_price': futures,
+                    'spread': spread,
+                    'percentage': percentage
+                })
+    
     return sorted(opportunities, key=lambda x: x['percentage'], reverse=True)
 
-def format_price_comparison(prices: Dict[str, Dict[str, Optional[float]]], symbol: str) -> str:
-    """Format price comparison table with better alignment"""
-    result = [f"💰 Price Comparison for {symbol}:"]
-    
-    # Calculate maximum widths for better alignment
-    exchange_width = 9  # Fixed width for exchange column
-    price_width = 12    # Fixed width for price columns
-    
-    # Header with better spacing
-    result.append("\n┌───────────┬──────────────┬──────────────┐")
-    result.append("│ Exchange  │     SPOT     │   FUTURES    │")
-    result.append("├───────────┼──────────────┼──────────────┤")
-    
-    for exchange in prices:
-        # Format prices with consistent decimal places and padding
-        spot_price = f"${prices[exchange]['spot']:.3f}" if prices[exchange]['spot'] else "N/A"
-        futures_price = f"${prices[exchange]['futures']:.3f}" if prices[exchange]['futures'] else "N/A"
-        
-        # Center-align exchange name and right-align prices
-        exchange_formatted = f" {exchange.upper():8} "  # 8 chars + 2 spaces
-        spot_formatted = f" {spot_price:>10} "      # 10 chars + 2 spaces
-        futures_formatted = f" {futures_price:>10} "  # 10 chars + 2 spaces
-        
-        result.append(f"│{exchange_formatted}│{spot_formatted}│{futures_formatted}│")
-    
-    result.append("└───────────┴──────────────┴──────────────┘")
-    return "\n".join(result)
-
 def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
-    """Format arbitrage opportunities"""
+    """Format arbitrage opportunities with improved clarity"""
     if not opportunities:
         return "\n🤔 No significant arbitrage opportunities found"
     
     result = ["\n📈 Arbitrage Opportunities:"]
     
     for opp in opportunities:
-        if opp['type'] in ['spot', 'futures']:
+        if opp['type'] == 'cross_exchange_spot':
             result.append(
-                f"\n{opp['type'].upper()} Market:"
-                f"\n• Buy on {opp['exchange1']} at ${opp['price1']:.2f}"
-                f"\n• Sell on {opp['exchange2']} at ${opp['price2']:.2f}"
-                f"\n• Spread: ${opp['spread']:.2f} ({opp['percentage']:.2f}%)"
-                f"\n• Transfer: {opp['exchange1']} ➡️ {opp['exchange2']}"
+                f"\n🔄 SPOT Market Arbitrage:"
+                f"\n• Buy on {opp['exchange1'].upper()} at ${opp['price1']:.4f}"
+                f"\n• Sell on {opp['exchange2'].upper()} at ${opp['price2']:.4f}"
+                f"\n• Spread: ${opp['spread']:.4f} ({opp['percentage']:.2f}%)"
+                f"\n• Route: {opp['exchange1'].upper()} ➡️ {opp['exchange2'].upper()}"
             )
-        else:  # spot_futures
+        elif opp['type'] == 'cross_exchange_futures':
             result.append(
-                f"\nSpot-Futures on {opp['exchange']}:"
-                f"\n• Spot Price: ${opp['spot_price']:.2f}"
-                f"\n• Futures Price: ${opp['futures_price']:.2f}"
-                f"\n• Spread: ${opp['spread']:.2f} ({opp['percentage']:.2f}%)"
+                f"\n🔄 FUTURES Market Arbitrage:"
+                f"\n• Buy on {opp['exchange1'].upper()} at ${opp['price1']:.4f}"
+                f"\n• Sell on {opp['exchange2'].upper()} at ${opp['price2']:.4f}"
+                f"\n• Spread: ${opp['spread']:.4f} ({opp['percentage']:.2f}%)"
+                f"\n• Route: {opp['exchange1'].upper()} ➡️ {opp['exchange2'].upper()}"
+            )
+        elif opp['type'] == 'cross_exchange_spot_futures':
+            result.append(
+                f"\n🔄 Cross-Exchange SPOT-FUTURES:"
+                f"\n• Buy SPOT on {opp['spot_exchange'].upper()} at ${opp['spot_price']:.4f}"
+                f"\n• Sell FUTURES on {opp['futures_exchange'].upper()} at ${opp['futures_price']:.4f}"
+                f"\n• Spread: ${opp['spread']:.4f} ({opp['percentage']:.2f}%)"
+                f"\n• Route: {opp['spot_exchange'].upper()} SPOT ➡️ {opp['futures_exchange'].upper()} FUTURES"
+            )
+        else:  # same_exchange_spot_futures
+            result.append(
+                f"\n📊 {opp['exchange'].upper()} SPOT-FUTURES:"
+                f"\n• SPOT: ${opp['spot_price']:.4f}"
+                f"\n• FUTURES: ${opp['futures_price']:.4f}"
+                f"\n• Spread: ${opp['spread']:.4f} ({opp['percentage']:.2f}%)"
             )
         result.append("")  # Add empty line between opportunities
     
