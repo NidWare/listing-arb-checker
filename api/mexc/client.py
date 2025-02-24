@@ -109,17 +109,37 @@ class MexcClient(BaseAPIClient):
             logger.error(f"Error fetching spot ticker: {str(e)}")
             return None
 
-    async def get_futures_ticker(self, symbol: str) -> Dict[str, Any]:
-        """Get futures market ticker"""
-        url = f"{self.base_url}/ticker/price"  # Removed duplicate api/v3
+    async def get_futures_price(self, symbol: str) -> Dict[str, Any]:
+        """Get futures market ticker including both market price and index price"""
+        # Get market price
+        url = f"{self.base_url}/ticker/price"
         params = {"symbol": symbol}
+        
         try:
+            # Get market price
             async with self.session.get(url, params=params) as response:
                 if response.status != 200:
                     logger.error(f"MEXC API error: {await response.text()}")
                     return None
-                data = await response.json()
-                return {"last": data["price"]} if "price" in data else None
+                market_data = await response.json()
+                
+            # Get index price
+            index_url = f"https://contract.mexc.com/api/v1/contract/index_price/{symbol.replace('USDT', '')}_USDT"
+            async with self.session.get(index_url) as response:
+                if response.status != 200:
+                    logger.error(f"MEXC API error: {await response.text()}")
+                    return None
+                index_data = await response.json()
+                
+                if not index_data.get('success'):
+                    logger.error(f"Failed to get index price: {index_data}")
+                    return None
+                    
+                return {
+                    "last": market_data["price"] if "price" in market_data else None,
+                    "index_price": index_data["data"]["indexPrice"] if "data" in index_data else None,
+                    "timestamp": index_data["data"]["timestamp"] if "data" in index_data else None
+                }
         except Exception as e:
             logger.error(f"Error fetching futures ticker: {str(e)}")
             return None
