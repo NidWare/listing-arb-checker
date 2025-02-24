@@ -139,9 +139,13 @@ class MexcClient(BaseAPIClient):
         params = {"symbol": symbol}
         
         try:
-            response = await self.make_request('GET', url, params=params)
-            data = await response.json()
-            return float(data["price"])
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, headers=self.get_headers()) as response:
+                    if response.status != 200:
+                        logger.error(f"MEXC API error: {await response.text()}")
+                        return None
+                    data = await response.json()
+                    return float(data["price"])
         except Exception as e:
             logger.error(f"Error fetching spot price for {symbol}: {str(e)}")
             return None
