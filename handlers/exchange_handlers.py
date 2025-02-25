@@ -303,8 +303,8 @@ async def monitor_prices(message: Message, query: str):
                                     f"Futures price: ${opp['futures_price']:.4f}\n"
                                     f"Price difference: {opp['percentage']:.2f}%\n"
                                 )
-                                
-                                await message.answer(alert_msg)
+                            
+                            await message.answer(alert_msg)
             
             # Update last opportunities
             last_opportunities = current_opps
