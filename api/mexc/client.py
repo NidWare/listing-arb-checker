@@ -135,21 +135,36 @@ class MexcClient(BaseAPIClient):
         await self.ensure_session()
         
         try:
-            # Get index price
-            index_url = f"https://contract.mexc.com/api/v1/contract/index_price/{symbol.replace('USDT', '')}_USDT"
+            # Format symbol for the request
+            formatted_symbol = f"{symbol.replace('USDT', '')}_USDT"
+            index_url = f"https://contract.mexc.com/api/v1/contract/index_price/{formatted_symbol}"
+            
+            logger.info(f"Fetching futures price for symbol: {symbol}")
+            logger.debug(f"Making request to URL: {index_url}")
+            
             async with self.session.get(index_url) as response:
                 if response.status != 200:
-                    logger.error(f"MEXC API error: {await response.text()}")
-                    return None
-                index_data = await response.json()
-                
-                if not index_data.get('success'):
-                    logger.error(f"Failed to get index price: {index_data}")
+                    error_text = await response.text()
+                    logger.error(f"MEXC API error - Status {response.status}: {error_text}")
                     return None
                     
-                return float(index_data["data"]["indexPrice"]) if "data" in index_data else None
+                index_data = await response.json()
+                logger.debug(f"Received response: {index_data}")
+                
+                if not index_data.get('success'):
+                    logger.error(f"Failed to get index price - API returned error: {index_data}")
+                    return None
+                
+                if "data" not in index_data or "indexPrice" not in index_data["data"]:
+                    logger.error(f"Unexpected response format - Missing required fields: {index_data}")
+                    return None
+                
+                price = float(index_data["data"]["indexPrice"])
+                logger.info(f"Successfully fetched futures price for {symbol}: {price}")
+                return price
+                
         except Exception as e:
-            logger.error(f"Error fetching futures price: {str(e)}")
+            logger.error(f"Error fetching futures price for {symbol}: {str(e)}", exc_info=True)
             return None
 
     async def get_spot_price(self, symbol: str) -> float:
