@@ -208,41 +208,46 @@ async def monitor_prices(message: Message, query: str):
         
         while True:
             prices = {}
+            has_any_price = False  # Flag to track if we got any price
+            price_message = f"📊 Current prices for {query}:\n\n"
+            
             # Collect prices from all exchanges
             for exchange in exchanges:
                 prices[exchange] = {'spot': None, 'futures': None}
                 try:
                     spot_price = await exchange_service.get_average_price(exchange, query, market_type="spot")
-                    futures_price = await exchange_service.get_average_price(exchange, query, market_type="futures")
-                    prices[exchange]['spot'] = spot_price
-                    prices[exchange]['futures'] = futures_price
+                    if spot_price:
+                        prices[exchange]['spot'] = spot_price
+                        has_any_price = True
+                        price_message += f"{exchange.upper()} Spot: ${spot_price:.4f}\n"
                 except Exception as e:
-                    logger.error(f"Error getting prices for {exchange}: {str(e)}")
-                    continue
+                    logger.error(f"Error getting spot price for {exchange}: {str(e)}")
+                    price_message += f"{exchange.upper()} Spot: Not available\n"
 
-            # Calculate arbitrage opportunities
-            opportunities = await calculate_arbitrage(prices)
-            
-            # Filter opportunities > 2%
-            significant_opportunities = [opp for opp in opportunities if opp['percentage'] >= 1.0] # CHANGE
-            
-            # Create unique identifiers for current opportunities
-            current_opps = set()
-            for opp in significant_opportunities:
-                opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
-                if 'exchange1' in opp:
-                    opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
-                elif 'spot_exchange' in opp:
-                    opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
-                else:
-                    opp_id += f"_{opp['exchange']}"
-                current_opps.add(opp_id)
-            
-            # Report new opportunities
-            new_opps = current_opps - last_opportunities
-            if new_opps:
-                # Format and send new opportunities
-                timestamp = datetime.now().strftime("%H:%M:%S")
+                try:
+                    futures_price = await exchange_service.get_average_price(exchange, query, market_type="futures")
+                    if futures_price:
+                        prices[exchange]['futures'] = futures_price
+                        has_any_price = True
+                        price_message += f"{exchange.upper()} Futures: ${futures_price:.4f}\n"
+                except Exception as e:
+                    logger.error(f"Error getting futures price for {exchange}: {str(e)}")
+                    price_message += f"{exchange.upper()} Futures: Not available\n"
+                
+                price_message += "\n"  # Add spacing between exchanges
+
+            # Send current prices regardless of arbitrage opportunities
+            await message.answer(price_message)
+
+            if has_any_price:
+                # Calculate arbitrage opportunities only if we have some prices
+                opportunities = await calculate_arbitrage(prices)
+                
+                # Filter opportunities > 1%
+                significant_opportunities = [opp for opp in opportunities if opp['percentage'] >= 0.1]
+                
+                # Create unique identifiers for current opportunities
+                current_opps = set()
                 for opp in significant_opportunities:
                     opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
                     if 'exchange1' in opp:
@@ -251,44 +256,59 @@ async def monitor_prices(message: Message, query: str):
                         opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
                     else:
                         opp_id += f"_{opp['exchange']}"
-                    
-                    if opp_id in new_opps:
-                        alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
-                        if opp['type'] == 'cross_exchange_spot':
-                            alert_msg += (
-                                f"Type: Spot-to-Spot\n"
-                                f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
-                                f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
-                                f"Price difference: {opp['percentage']:.2f}%\n"
-                                f"Potential profit: ${opp['spread']:.2f}"
-                            )
-                        elif opp['type'] == 'cross_exchange_futures':
-                            alert_msg += (
-                                f"Type: Futures-to-Futures\n"
-                                f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
-                                f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
-                                f"Price difference: {opp['percentage']:.2f}%\n"
-                                f"Potential profit: ${opp['spread']:.2f}"
-                            )
-                        elif opp['type'] == 'cross_exchange_spot_futures':
-                            alert_msg += (
-                                f"Type: Spot-to-Futures\n"
-                                f"Spot exchange: {opp['spot_exchange'].upper()} at ${opp['spot_price']:.4f}\n"
-                                f"Futures exchange: {opp['futures_exchange'].upper()} at ${opp['futures_price']:.4f}\n"
-                                f"Price difference: {opp['percentage']:.2f}%\n"
-                                f"Potential profit: ${opp['spread']:.2f}"
-                            )
-                        else:  # same_exchange_spot_futures
-                            alert_msg += (
-                                f"Type: Same-Exchange Spot-Futures\n"
-                                f"Exchange: {opp['exchange'].upper()}\n"
-                                f"Spot price: ${opp['spot_price']:.4f}\n"
-                                f"Futures price: ${opp['futures_price']:.4f}\n"
-                                f"Price difference: {opp['percentage']:.2f}%\n"
-                                f"Potential profit: ${opp['spread']:.2f}"
-                            )
+                    current_opps.add(opp_id)
+                
+                # Report new opportunities
+                new_opps = current_opps - last_opportunities
+                if new_opps:
+                    # Format and send new opportunities
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    for opp in significant_opportunities:
+                        opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
+                        if 'exchange1' in opp:
+                            opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
+                        elif 'spot_exchange' in opp:
+                            opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
+                        else:
+                            opp_id += f"_{opp['exchange']}"
                         
-                        await message.answer(alert_msg)
+                        if opp_id in new_opps:
+                            alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
+                            if opp['type'] == 'cross_exchange_spot':
+                                alert_msg += (
+                                    f"Type: Spot-to-Spot\n"
+                                    f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
+                                    f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
+                                    f"Price difference: {opp['percentage']:.2f}%\n"
+                                    f"Potential profit: ${opp['spread']:.2f}"
+                                )
+                            elif opp['type'] == 'cross_exchange_futures':
+                                alert_msg += (
+                                    f"Type: Futures-to-Futures\n"
+                                    f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
+                                    f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
+                                    f"Price difference: {opp['percentage']:.2f}%\n"
+                                    f"Potential profit: ${opp['spread']:.2f}"
+                                )
+                            elif opp['type'] == 'cross_exchange_spot_futures':
+                                alert_msg += (
+                                    f"Type: Spot-to-Futures\n"
+                                    f"Spot exchange: {opp['spot_exchange'].upper()} at ${opp['spot_price']:.4f}\n"
+                                    f"Futures exchange: {opp['futures_exchange'].upper()} at ${opp['futures_price']:.4f}\n"
+                                    f"Price difference: {opp['percentage']:.2f}%\n"
+                                    f"Potential profit: ${opp['spread']:.2f}"
+                                )
+                            else:  # same_exchange_spot_futures
+                                alert_msg += (
+                                    f"Type: Same-Exchange Spot-Futures\n"
+                                    f"Exchange: {opp['exchange'].upper()}\n"
+                                    f"Spot price: ${opp['spot_price']:.4f}\n"
+                                    f"Futures price: ${opp['futures_price']:.4f}\n"
+                                    f"Price difference: {opp['percentage']:.2f}%\n"
+                                    f"Potential profit: ${opp['spread']:.2f}"
+                                )
+                                
+                                await message.answer(alert_msg)
             
             # Update last opportunities
             last_opportunities = current_opps
