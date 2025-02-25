@@ -224,7 +224,7 @@ async def monitor_prices(message: Message, query: str):
             opportunities = await calculate_arbitrage(prices)
             
             # Filter opportunities > 2%
-            significant_opportunities = [opp for opp in opportunities if opp['percentage'] >= 2.0]
+            significant_opportunities = [opp for opp in opportunities if opp['percentage'] >= 0.1] # CHANGE
             
             # Create unique identifiers for current opportunities
             current_opps = set()
