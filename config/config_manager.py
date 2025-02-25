@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 from typing import Dict
 
 class ConfigManager:
-    # Load environment variables from .env file
     load_dotenv()
 
     @staticmethod

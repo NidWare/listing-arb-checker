@@ -4,10 +4,15 @@ from aiogram.types import Message
 from services.exchange_service import ExchangeService
 import logging
 from typing import Dict, Optional, Tuple, List
+import asyncio
+from datetime import datetime
 
 router = Router()
 exchange_service = ExchangeService()
 logger = logging.getLogger(__name__)
+
+# Store active monitoring tasks
+active_monitors = {}
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
@@ -149,8 +154,8 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
     
     result = ["\n📈 Arbitrage Opportunities:\n"]
     result.append("<pre>")
-    result.append("Type     Exchange Route      Spread   Profit")
-    result.append("──────────────────────────────────────────")
+    result.append("Type      Exchange Route      Spread   Profit")
+    result.append("───────────────────────────────────────────")
     
     for opp in opportunities:
         if opp['type'] == 'cross_exchange_spot':
@@ -159,7 +164,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             ex2 = f"{opp['exchange2'].upper():6}"
             route = f"{ex1}→ {ex2}"
             result.append(
-                f"SPOT     {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"S         {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_futures':
@@ -168,7 +173,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             ex2 = f"{opp['exchange2'].upper():6}"
             route = f"{ex1}→ {ex2}"
             result.append(
-                f"FUTURES  {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"F         {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_spot_futures':
@@ -182,18 +187,129 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             else:
                 cross_type = "F→S"  # futures to spot
             result.append(
-                f"CROSS{cross_type:<3} {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"CROSS {cross_type} {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
         
         else:  # same_exchange_spot_futures
             profit = opp['spread'] * 100  # Example calculation, adjust as needed
             route = f"{opp['exchange'].upper():15}"
             result.append(
-                f"SPOTFUT  {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"S/F       {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
     
     result.append("</pre>")
     return "\n".join(result)
+
+async def monitor_prices(message: Message, query: str):
+    """Background task to monitor prices and detect arbitrage opportunities"""
+    try:
+        exchanges = ["bitget", "gate", "mexc"]
+        last_opportunities = set()  # Store hash of last reported opportunities
+        
+        while True:
+            prices = {}
+            # Collect prices from all exchanges
+            for exchange in exchanges:
+                prices[exchange] = {'spot': None, 'futures': None}
+                try:
+                    spot_price = await exchange_service.get_average_price(exchange, query, market_type="spot")
+                    futures_price = await exchange_service.get_average_price(exchange, query, market_type="futures")
+                    prices[exchange]['spot'] = spot_price
+                    prices[exchange]['futures'] = futures_price
+                except Exception as e:
+                    logger.error(f"Error getting prices for {exchange}: {str(e)}")
+                    continue
+
+            # Calculate arbitrage opportunities
+            opportunities = await calculate_arbitrage(prices)
+            
+            # Filter opportunities > 2%
+            significant_opportunities = [opp for opp in opportunities if opp['percentage'] >= 2.0]
+            
+            # Create unique identifiers for current opportunities
+            current_opps = set()
+            for opp in significant_opportunities:
+                opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
+                if 'exchange1' in opp:
+                    opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
+                elif 'spot_exchange' in opp:
+                    opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
+                else:
+                    opp_id += f"_{opp['exchange']}"
+                current_opps.add(opp_id)
+            
+            # Report new opportunities
+            new_opps = current_opps - last_opportunities
+            if new_opps:
+                # Format and send new opportunities
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                for opp in significant_opportunities:
+                    opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
+                    if 'exchange1' in opp:
+                        opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
+                    elif 'spot_exchange' in opp:
+                        opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
+                    else:
+                        opp_id += f"_{opp['exchange']}"
+                    
+                    if opp_id in new_opps:
+                        alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
+                        if opp['type'] == 'cross_exchange_spot':
+                            alert_msg += (
+                                f"Type: Spot-to-Spot\n"
+                                f"Buy on: {opp['exchange1'].upper()}\n"
+                                f"Sell on: {opp['exchange2'].upper()}\n"
+                                f"Price difference: {opp['percentage']:.2f}%\n"
+                                f"Potential profit: ${opp['spread']:.2f}"
+                            )
+                        elif opp['type'] == 'cross_exchange_futures':
+                            alert_msg += (
+                                f"Type: Futures-to-Futures\n"
+                                f"Buy on: {opp['exchange1'].upper()}\n"
+                                f"Sell on: {opp['exchange2'].upper()}\n"
+                                f"Price difference: {opp['percentage']:.2f}%\n"
+                                f"Potential profit: ${opp['spread']:.2f}"
+                            )
+                        elif opp['type'] == 'cross_exchange_spot_futures':
+                            alert_msg += (
+                                f"Type: Spot-to-Futures\n"
+                                f"Spot exchange: {opp['spot_exchange'].upper()}\n"
+                                f"Futures exchange: {opp['futures_exchange'].upper()}\n"
+                                f"Price difference: {opp['percentage']:.2f}%\n"
+                                f"Potential profit: ${opp['spread']:.2f}"
+                            )
+                        else:  # same_exchange_spot_futures
+                            alert_msg += (
+                                f"Type: Same-Exchange Spot-Futures\n"
+                                f"Exchange: {opp['exchange'].upper()}\n"
+                                f"Price difference: {opp['percentage']:.2f}%\n"
+                                f"Potential profit: ${opp['spread']:.2f}"
+                            )
+                        
+                        await message.answer(alert_msg)
+            
+            # Update last opportunities
+            last_opportunities = current_opps
+            
+            # Wait for 5 seconds before next check
+            await asyncio.sleep(5)
+            
+    except asyncio.CancelledError:
+        logger.info(f"Monitoring stopped for {query}")
+    except Exception as e:
+        logger.error(f"Error in price monitoring: {str(e)}")
+        await message.answer(f"❌ Error in price monitoring: {str(e)}")
+
+@router.message(Command("stop"))
+async def cmd_stop(message: Message):
+    """Stop monitoring for the user"""
+    user_id = message.from_user.id
+    if user_id in active_monitors:
+        active_monitors[user_id].cancel()
+        del active_monitors[user_id]
+        await message.answer("✅ Monitoring stopped")
+    else:
+        await message.answer("❌ No active monitoring found")
 
 @router.message()
 async def handle_search(message: Message):
@@ -204,51 +320,24 @@ async def handle_search(message: Message):
         return
 
     try:
+        user_id = message.from_user.id
+        
+        # Cancel existing monitoring task if any
+        if user_id in active_monitors:
+            active_monitors[user_id].cancel()
+            del active_monitors[user_id]
+        
         # Send initial message
-        status_message = await message.answer("🔍 Searching across exchanges...")
+        await message.answer(f"🔍 Starting price monitoring for {query}...")
         
-        exchanges = ["bitget", "gate", "mexc"]
-        prices = {}
+        # Start new monitoring task
+        task = asyncio.create_task(monitor_prices(message, query))
+        active_monitors[user_id] = task
         
-        # Collect prices from all exchanges
-        for exchange in exchanges:
-            prices[exchange] = {'spot': None, 'futures': None}
-            try:
-                # Get both SPOT and FUTURES prices
-                spot_price = await exchange_service.get_average_price(exchange, query, market_type="spot")
-                futures_price = await exchange_service.get_average_price(exchange, query, market_type="futures")
-                
-                prices[exchange]['spot'] = spot_price
-                prices[exchange]['futures'] = futures_price
-                
-            except Exception as e:
-                logger.error(f"Error getting prices for {exchange}: {str(e)}")
-                continue
-        
-        # If no prices found at all
-        if not any(any(v.values()) for v in prices.values()):
-            await status_message.edit_text(f"❌ No prices found for '{query}' on any exchange")
-            return
-        
-        # Calculate arbitrage opportunities
-        opportunities = await calculate_arbitrage(prices)
-        
-        # Format response
-        response = [
-            f"🎯 Analysis for {query}:",
-            format_price_comparison(prices, query),
-            format_arbitrage_opportunities(opportunities),
-            "\n💡 Tips:",
-            "• Check transfer fees and limits",
-            "• Verify market liquidity",
-            "• Monitor price changes",
-            "• Consider trading fees"
-        ]
-        
-        # Update status message with results
-        await status_message.edit_text(
-            "\n".join(response),
-            parse_mode="HTML"
+        await message.answer(
+            "✅ Monitoring started!\n\n"
+            "I will notify you when there are arbitrage opportunities with >2% difference.\n"
+            "Use /stop command to stop monitoring."
         )
 
     except Exception as e:
