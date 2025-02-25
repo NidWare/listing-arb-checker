@@ -257,24 +257,24 @@ async def monitor_prices(message: Message, query: str):
                         if opp['type'] == 'cross_exchange_spot':
                             alert_msg += (
                                 f"Type: Spot-to-Spot\n"
-                                f"Buy on: {opp['exchange1'].upper()}\n"
-                                f"Sell on: {opp['exchange2'].upper()}\n"
+                                f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
+                                f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
                                 f"Price difference: {opp['percentage']:.2f}%\n"
                                 f"Potential profit: ${opp['spread']:.2f}"
                             )
                         elif opp['type'] == 'cross_exchange_futures':
                             alert_msg += (
                                 f"Type: Futures-to-Futures\n"
-                                f"Buy on: {opp['exchange1'].upper()}\n"
-                                f"Sell on: {opp['exchange2'].upper()}\n"
+                                f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
+                                f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
                                 f"Price difference: {opp['percentage']:.2f}%\n"
                                 f"Potential profit: ${opp['spread']:.2f}"
                             )
                         elif opp['type'] == 'cross_exchange_spot_futures':
                             alert_msg += (
                                 f"Type: Spot-to-Futures\n"
-                                f"Spot exchange: {opp['spot_exchange'].upper()}\n"
-                                f"Futures exchange: {opp['futures_exchange'].upper()}\n"
+                                f"Spot exchange: {opp['spot_exchange'].upper()} at ${opp['spot_price']:.4f}\n"
+                                f"Futures exchange: {opp['futures_exchange'].upper()} at ${opp['futures_price']:.4f}\n"
                                 f"Price difference: {opp['percentage']:.2f}%\n"
                                 f"Potential profit: ${opp['spread']:.2f}"
                             )
@@ -282,6 +282,8 @@ async def monitor_prices(message: Message, query: str):
                             alert_msg += (
                                 f"Type: Same-Exchange Spot-Futures\n"
                                 f"Exchange: {opp['exchange'].upper()}\n"
+                                f"Spot price: ${opp['spot_price']:.4f}\n"
+                                f"Futures price: ${opp['futures_price']:.4f}\n"
                                 f"Price difference: {opp['percentage']:.2f}%\n"
                                 f"Potential profit: ${opp['spread']:.2f}"
                             )
