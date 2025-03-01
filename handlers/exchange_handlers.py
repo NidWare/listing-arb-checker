@@ -69,7 +69,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
     
     # Helper function to calculate percentage difference
     def calc_percentage(price1: float, price2: float) -> float:
-        return abs(price1 - price2) / min(price1, price2) * 100
+        return (price2 - price1) / price1 * 100
     
     # Compare all possible combinations
     for i in range(len(exchanges)):
@@ -79,71 +79,75 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                 
                 # SPOT to SPOT between exchanges
                 if prices[ex1]['spot'] and prices[ex2]['spot']:
-                    price1, price2 = prices[ex1]['spot'], prices[ex2]['spot']
-                    spread = abs(price1 - price2)
-                    percentage = calc_percentage(price1, price2)
-                    
-                    if percentage >= 0.1:  # Lower threshold to show more opportunities
-                        opportunities.append({
-                            'type': 'cross_exchange_spot',
-                            'exchange1': ex1,
-                            'exchange2': ex2,
-                            'price1': price1,
-                            'price2': price2,
-                            'spread': spread,
-                            'percentage': percentage
-                        })
+                    buy_price, sell_price = prices[ex1]['spot'], prices[ex2]['spot']
+                    if buy_price < sell_price:  # Only if we can buy low and sell high
+                        spread = sell_price - buy_price
+                        percentage = calc_percentage(buy_price, sell_price)
+                        
+                        if percentage >= 0.1:  # Lower threshold to show more opportunities
+                            opportunities.append({
+                                'type': 'cross_exchange_spot',
+                                'exchange1': ex1,
+                                'exchange2': ex2,
+                                'price1': buy_price,
+                                'price2': sell_price,
+                                'spread': spread,
+                                'percentage': percentage
+                            })
                 
                 # FUTURES to FUTURES between exchanges
                 if prices[ex1]['futures'] and prices[ex2]['futures']:
-                    price1, price2 = prices[ex1]['futures'], prices[ex2]['futures']
-                    spread = abs(price1 - price2)
-                    percentage = calc_percentage(price1, price2)
-                    
-                    if percentage >= 0.1:
-                        opportunities.append({
-                            'type': 'cross_exchange_futures',
-                            'exchange1': ex1,
-                            'exchange2': ex2,
-                            'price1': price1,
-                            'price2': price2,
-                            'spread': spread,
-                            'percentage': percentage
-                        })
+                    buy_price, sell_price = prices[ex1]['futures'], prices[ex2]['futures']
+                    if buy_price < sell_price:  # Only if we can buy low and sell high
+                        spread = sell_price - buy_price
+                        percentage = calc_percentage(buy_price, sell_price)
+                        
+                        if percentage >= 0.1:
+                            opportunities.append({
+                                'type': 'cross_exchange_futures',
+                                'exchange1': ex1,
+                                'exchange2': ex2,
+                                'price1': buy_price,
+                                'price2': sell_price,
+                                'spread': spread,
+                                'percentage': percentage
+                            })
                 
                 # SPOT to FUTURES between different exchanges
                 if prices[ex1]['spot'] and prices[ex2]['futures']:
-                    price1, price2 = prices[ex1]['spot'], prices[ex2]['futures']
-                    spread = abs(price1 - price2)
-                    percentage = calc_percentage(price1, price2)
-                    
-                    if percentage >= 0.1:
-                        opportunities.append({
-                            'type': 'cross_exchange_spot_futures',
-                            'spot_exchange': ex1,
-                            'futures_exchange': ex2,
-                            'spot_price': price1,
-                            'futures_price': price2,
-                            'spread': spread,
-                            'percentage': percentage
-                        })
+                    buy_price, sell_price = prices[ex1]['spot'], prices[ex2]['futures']
+                    if buy_price < sell_price:  # Only if we can buy low and sell high
+                        spread = sell_price - buy_price
+                        percentage = calc_percentage(buy_price, sell_price)
+                        
+                        if percentage >= 0.1:
+                            opportunities.append({
+                                'type': 'cross_exchange_spot_futures',
+                                'spot_exchange': ex1,
+                                'futures_exchange': ex2,
+                                'spot_price': buy_price,
+                                'futures_price': sell_price,
+                                'spread': spread,
+                                'percentage': percentage
+                            })
     
     # Within same exchange SPOT vs FUTURES
     for ex in exchanges:
         if prices[ex]['spot'] and prices[ex]['futures']:
             spot, futures = prices[ex]['spot'], prices[ex]['futures']
-            spread = abs(spot - futures)
-            percentage = calc_percentage(spot, futures)
-            
-            if percentage >= 0.1:
-                opportunities.append({
-                    'type': 'same_exchange_spot_futures',
-                    'exchange': ex,
-                    'spot_price': spot,
-                    'futures_price': futures,
-                    'spread': spread,
-                    'percentage': percentage
-                })
+            if spot < futures:  # Only if spot price is lower than futures
+                spread = futures - spot
+                percentage = calc_percentage(spot, futures)
+                
+                if percentage >= 0.1:
+                    opportunities.append({
+                        'type': 'same_exchange_spot_futures',
+                        'exchange': ex,
+                        'spot_price': spot,
+                        'futures_price': futures,
+                        'spread': spread,
+                        'percentage': percentage
+                    })
     
     return sorted(opportunities, key=lambda x: x['percentage'], reverse=True)
 
@@ -290,7 +294,6 @@ async def monitor_prices(message: Message, query: str):
                                 )
                             elif opp['type'] == 'cross_exchange_spot_futures':
                                 alert_msg += (
-                                    f"Type: Spot-to-Futures\n"
                                     f"Spot exchange: {opp['spot_exchange'].upper()} at ${opp['spot_price']:.4f}\n"
                                     f"Futures exchange: {opp['futures_exchange'].upper()} at ${opp['futures_price']:.4f}\n"
                                     f"Price difference: {opp['percentage']:.2f}%\n"
