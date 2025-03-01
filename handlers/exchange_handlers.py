@@ -295,14 +295,6 @@ async def monitor_prices(message: Message, query: str):
                                     f"Futures exchange: {opp['futures_exchange'].upper()} at ${opp['futures_price']:.4f}\n"
                                     f"Price difference: {opp['percentage']:.2f}%\n"
                                 )
-                            else:  # same_exchange_spot_futures
-                                alert_msg += (
-                                    f"Type: Same-Exchange Spot-Futures\n"
-                                    f"Exchange: {opp['exchange'].upper()}\n"
-                                    f"Spot price: ${opp['spot_price']:.4f}\n"
-                                    f"Futures price: ${opp['futures_price']:.4f}\n"
-                                    f"Price difference: {opp['percentage']:.2f}%\n"
-                                )
                             
                             await message.answer(alert_msg)
             
@@ -310,7 +302,7 @@ async def monitor_prices(message: Message, query: str):
             last_opportunities = current_opps
             
             # Wait for 5 seconds before next check
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
             
     except asyncio.CancelledError:
         logger.info(f"Monitoring stopped for {query}")
