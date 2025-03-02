@@ -207,7 +207,6 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
 async def monitor_prices(message: Message, query: str):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
-        exchanges = ["bitget", "gate", "mexc", "bybit"]
         last_opportunities = set()  # Store hash of last reported opportunities
         
         while True:
@@ -216,7 +215,7 @@ async def monitor_prices(message: Message, query: str):
             price_message = f"📊 Current prices for {query}:\n\n"
             
             # Collect prices from all exchanges
-            for exchange in exchanges:
+            for exchange in ["bitget", "gate", "mexc", "bybit"]: # TODO: CHANGE THIS TO THE EXCHANGES YOU WANT TO MONITOR
                 prices[exchange] = {'spot': None, 'futures': None}
                 try:
                     spot_price = await exchange_service.get_average_price(exchange, query, market_type="spot")
