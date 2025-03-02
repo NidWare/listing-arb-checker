@@ -59,100 +59,6 @@ class ExchangeService:
 
         return "\n\n".join(results) if results else "No results found on any exchange."
 
-    async def search_coin(self, exchange: str, search_type: str, query: str) -> Optional[str]:
-        try:
-            if exchange == "bitget":
-                return await self._search_bitget(query)
-            elif exchange == "gate":
-                return await self._search_gate(query)
-            elif exchange == "mexc":
-                return await self._search_mexc(query)
-            elif exchange == "bybit":
-                return await self._search_bybit(query)
-            return None
-        except Exception as e:
-            logger.error(f"Error searching {exchange}: {str(e)}")
-            return None
-
-    async def _search_bitget(self, query: str) -> Optional[str]:
-        try:
-            session = await self.session
-            async with session.get(f"https://api.bitget.com/api/v2/spot/public/symbols") as response:
-                if response.status == 200:
-                    data = await response.json()
-                    coins = [coin for coin in data["data"] if query.upper() in coin["symbol"].upper()]
-                    if coins:
-                        result = f"🔍 <b>Bitget Results:</b>\n"
-                        for coin in coins:  # Removed limit
-                            result += (
-                                f"• Symbol: {coin['symbol']}\n"
-                                "-------------------\n"
-                            )
-                        return result
-        except Exception as e:
-            logger.error(f"Bitget API error: {str(e)}")
-        return None
-
-    async def _search_gate(self, query: str) -> Optional[str]:
-        try:
-            session = await self.session
-            async with session.get(f"https://api.gateio.ws/api/v4/spot/currency_pairs") as response:
-                if response.status == 200:  
-                    data = await response.json()
-                    coins = [coin for coin in data if query.upper() in coin["id"].upper()]
-                    if coins:
-                        result = f"🔍 <b>Gate.io Results:</b>\n"
-                        for coin in coins:  # Removed limit
-                            result += (
-                                f"• Trading Pair: {coin['id']}\n"
-                                f"  Base: {coin['base']}\n"
-                                f"  Quote: {coin['quote']}\n"
-                            )
-                        return result
-        except Exception as e:
-            logger.error(f"Gate.io API error: {str(e)}")
-        return None
-
-    async def _search_mexc(self, query: str) -> Optional[str]:
-        try:
-            client, service = self.clients['mexc']
-            data = await client.get_all_coins()
-            
-            # Search by name
-            coins = [coin for coin in data if query.upper() in coin.get('Name', '').upper() 
-                    or query.upper() in coin.get('coin', '').upper()]
-            
-            if coins:
-                result = f"🔍 <b>MEXC Results:</b>\n"
-                for coin in coins:
-                    result += service.format_coin_info(coin) + "\n-------------------\n"
-                return result
-            return None
-            
-        except Exception as e:
-            logger.error(f"MEXC API error: {str(e)}")
-            return None
-
-    async def _search_bybit(self, query: str) -> Optional[str]:
-        try:
-            client, service = self.clients['bybit']
-            data = await client.get_all_coins()
-            
-            # Search by name
-            coins = [coin for coin in data.get('result', {}).get('list', []) 
-                    if query.upper() in coin.get('name', '').upper() 
-                    or query.upper() in coin.get('coin', '').upper()]
-            
-            if coins:
-                result = f"🔍 <b>Bybit Results:</b>\n"
-                for coin in coins:
-                    result += service.format_coin_info(coin) + "\n-------------------\n"
-                return result
-            return None
-            
-        except Exception as e:
-            logger.error(f"Bybit API error: {str(e)}")
-            return None
 
     def _get_exchange_client(self, exchange: str):
         """
@@ -182,25 +88,9 @@ class ExchangeService:
             exchange_client = self._get_exchange_client(exchange)
             
             if market_type == "futures":
-                # Use futures market endpoints
-                if exchange == "mexc":
-                    ticker = await exchange_client.get_futures_price(symbol)
-                elif exchange == "gate":
-                    ticker = await exchange_client.get_futures_price(symbol)
-                elif exchange == "bitget":
-                    ticker = await exchange_client.get_futures_price(symbol)
-                elif exchange == "bybit":
-                    ticker = await exchange_client.get_futures_price(symbol)
+                ticker = await exchange_client.get_futures_price(symbol)
             else:
-                # Use spot market endpoints
-                if exchange == "mexc":
-                    ticker = await exchange_client.get_spot_price(symbol)
-                elif exchange == "gate":
-                    ticker = await exchange_client.get_spot_price(symbol)
-                elif exchange == "bitget":
-                    ticker = await exchange_client.get_spot_price(symbol)
-                elif exchange == "bybit":
-                    ticker = await exchange_client.get_spot_price(symbol)
+                ticker = await exchange_client.get_spot_price(symbol)
             return ticker
             
         except Exception as e:
