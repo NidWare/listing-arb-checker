@@ -10,7 +10,7 @@ from api.bybit.coin_service import BybitCoinService
 from config.config_manager import ConfigManager
 import aiohttp
 import logging
-
+from api.base_client import BaseAPIClient
 logger = logging.getLogger(__name__)
 
 class ExchangeService:
@@ -60,7 +60,7 @@ class ExchangeService:
         return "\n\n".join(results) if results else "No results found on any exchange."
 
 
-    def _get_exchange_client(self, exchange: str):
+    def _get_exchange_client(self, exchange: str) -> BaseAPIClient:
         """
         Get the client instance for the specified exchange
         
