@@ -207,7 +207,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
 async def monitor_prices(message: Message, query: str):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
-        exchanges = ["bitget", "gate", "mexc"]
+        exchanges = ["bitget", "gate", "mexc", "bybit"]
         last_opportunities = set()  # Store hash of last reported opportunities
         
         while True:
