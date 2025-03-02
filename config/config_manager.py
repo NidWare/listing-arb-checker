@@ -32,4 +32,15 @@ class ConfigManager:
         return {
             'api_key': api_key,
             'api_secret': api_secret
+        }
+
+    @staticmethod
+    def get_bybit_credentials() -> dict:
+        api_key = os.getenv('BYBIT_API_KEY')
+        api_secret = os.getenv('BYBIT_API_SECRET')
+        if not api_key or not api_secret:
+            raise ValueError("Bybit credentials not found in environment variables")
+        return {
+            'api_key': api_key,
+            'api_secret': api_secret
         } 

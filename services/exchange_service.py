@@ -2,9 +2,11 @@ from typing import Optional, Dict, Any
 from api.mexc.client import MexcClient
 from api.gate.client import GateClient
 from api.bitget.client import BitgetClient
+from api.bybit.client import BybitClient
 from api.mexc.coin_service import MexcCoinService
 from api.gate.coin_service import GateCoinService
 from api.bitget.coin_service import BitgetCoinService
+from api.bybit.coin_service import BybitCoinService
 from config.config_manager import ConfigManager
 import aiohttp
 import logging
@@ -16,11 +18,13 @@ class ExchangeService:
         # Initialize all clients and services
         mexc_credentials = ConfigManager.get_mexc_credentials()
         bitget_credentials = ConfigManager.get_bitget_credentials()
+        bybit_credentials = ConfigManager.get_bybit_credentials()
         
         self.clients = {
             'mexc': (MexcClient(**mexc_credentials), MexcCoinService()),
             'gate': (GateClient(), GateCoinService()),
-            'bitget': (BitgetClient(**bitget_credentials), BitgetCoinService())
+            'bitget': (BitgetClient(**bitget_credentials), BitgetCoinService()),
+            'bybit': (BybitClient(**bybit_credentials), BybitCoinService())
         }
         self._session = None
 
@@ -63,6 +67,8 @@ class ExchangeService:
                 return await self._search_gate(query)
             elif exchange == "mexc":
                 return await self._search_mexc(query)
+            elif exchange == "bybit":
+                return await self._search_bybit(query)
             return None
         except Exception as e:
             logger.error(f"Error searching {exchange}: {str(e)}")
@@ -127,6 +133,27 @@ class ExchangeService:
             logger.error(f"MEXC API error: {str(e)}")
             return None
 
+    async def _search_bybit(self, query: str) -> Optional[str]:
+        try:
+            client, service = self.clients['bybit']
+            data = await client.get_all_coins()
+            
+            # Search by name
+            coins = [coin for coin in data.get('result', {}).get('list', []) 
+                    if query.upper() in coin.get('name', '').upper() 
+                    or query.upper() in coin.get('coin', '').upper()]
+            
+            if coins:
+                result = f"🔍 <b>Bybit Results:</b>\n"
+                for coin in coins:
+                    result += service.format_coin_info(coin) + "\n-------------------\n"
+                return result
+            return None
+            
+        except Exception as e:
+            logger.error(f"Bybit API error: {str(e)}")
+            return None
+
     def _get_exchange_client(self, exchange: str):
         """
         Get the client instance for the specified exchange
@@ -162,6 +189,8 @@ class ExchangeService:
                     ticker = await exchange_client.get_futures_price(symbol)
                 elif exchange == "bitget":
                     ticker = await exchange_client.get_futures_price(symbol)
+                elif exchange == "bybit":
+                    ticker = await exchange_client.get_futures_price(symbol)
             else:
                 # Use spot market endpoints
                 if exchange == "mexc":
@@ -169,6 +198,8 @@ class ExchangeService:
                 elif exchange == "gate":
                     ticker = await exchange_client.get_spot_price(symbol)
                 elif exchange == "bitget":
+                    ticker = await exchange_client.get_spot_price(symbol)
+                elif exchange == "bybit":
                     ticker = await exchange_client.get_spot_price(symbol)
             return ticker
             
