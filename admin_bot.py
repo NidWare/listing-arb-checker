@@ -28,6 +28,9 @@ admin_router = Router()
 # Store active monitoring tasks
 active_monitors = {}
 
+# Store temporary user queries while waiting for min percentage input
+user_queries = {}
+
 # Register message logging middleware
 admin_dp.message.middleware(MessageLoggingMiddleware())
 
@@ -84,6 +87,49 @@ async def cmd_monitor(message: Message):
         return
 
     coin = args[1].upper()
+    
+    # Ask for minimum arbitrage percentage
+    await message.answer(f"Coin: {coin}\nPlease enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
+    
+    # Store the query information to start monitoring after getting the percentage
+    user_queries[message.from_user.id] = coin
+    
+@admin_router.message(Command("cancel"))
+async def cmd_cancel(message: Message):
+    """Cancel the current monitoring setup process"""
+    user_id = message.from_user.id
+    
+    if user_id in user_queries:
+        # Remove the query from waiting list
+        coin = user_queries.pop(user_id)
+        await message.answer(f"✅ Monitoring setup for {coin} has been cancelled.")
+    else:
+        await message.answer("No monitoring setup in progress to cancel.")
+
+@admin_router.message(lambda message: message.from_user.id in user_queries)
+async def handle_min_percentage(message: Message):
+    user_id = message.from_user.id
+    
+    if user_id not in ConfigManager.get_admin_user_ids():
+        await message.answer("⚠️ You don't have permission to use this command.")
+        return
+    
+    # Get the stored coin
+    coin = user_queries.get(user_id)
+    
+    # Parse the minimum percentage
+    try:
+        min_percentage = float(message.text.strip())
+        if min_percentage <= 0:
+            await message.answer("Minimum percentage must be greater than 0. Please try again or use /cancel to abort.")
+            return
+    except ValueError:
+        await message.answer("Please enter a valid number (e.g., 0.5 for 0.5%). Try again or use /cancel to abort.")
+        return
+    
+    # Remove the query from the waiting list
+    user_queries.pop(user_id, None)
+    
     # Use the supergroup ID for monitoring
     chat_id = ConfigManager.get_alert_group_id()  # Get from config
     topic_id = int(os.getenv("TOPIC_ID", "1"))  # Get topic ID from env
@@ -98,21 +144,24 @@ async def cmd_monitor(message: Message):
         # Send initial message
         await message.bot.send_message(
             chat_id,
-            f"🔍 Starting price monitoring for {coin}...",
+            f"🔍 Starting price monitoring for {coin} with minimum arbitrage of {min_percentage}%...",
             message_thread_id=topic_id
         )
 
-        # Start new monitoring task
-        task = asyncio.create_task(monitor_prices(chat_id, coin, admin_bot))
+        # Start new monitoring task with the custom min_arbitrage_percentage
+        task = asyncio.create_task(monitor_prices(chat_id, coin, admin_bot, min_percentage))
         active_monitors[chat_id] = task
 
         await message.bot.send_message(
             chat_id,
-            "✅ Monitoring started!\n\n"
-            "I will notify you when there are arbitrage opportunities.\n"
+            f"✅ Monitoring started for {coin}!\n\n"
+            f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
             "Use /stop_monitor command to stop monitoring.",
             message_thread_id=topic_id
         )
+        
+        # Also send confirmation to the admin
+        await message.answer(f"✅ Started monitoring {coin} with minimum arbitrage set to {min_percentage}%")
 
     except Exception as e:
         logger.error(f"Error starting monitoring: {str(e)}", exc_info=True)
@@ -147,6 +196,10 @@ async def cmd_stop_monitor(message: Message):
 @admin_router.message()
 async def debug_chat_info(message: Message):
     """Debug handler to log chat information"""
+    # Skip if waiting for min percentage input
+    if message.from_user.id in user_queries:
+        return
+        
     logger.info(
         f"Debug Chat Info:\n"
         f"Chat ID: {message.chat.id}\n"
