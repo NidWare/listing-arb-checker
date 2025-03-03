@@ -1,6 +1,6 @@
 from aiogram import Router, F
 from aiogram.filters import Command, ChatMemberUpdatedFilter
-from aiogram.types import Message, ChatMemberUpdated, CallbackQuery
+from aiogram.types import Message, ChatMemberUpdated, CallbackQuery, InlineKeyboardMarkup
 from aiogram.enums.chat_member_status import ChatMemberStatus
 from services.exchange_service import ExchangeService
 import logging
