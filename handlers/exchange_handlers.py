@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Optional, Tuple, List
 import asyncio
 from datetime import datetime
-from ..dex.dex_tools import DexTools
+from dex.dex_tools import DexTools
 import os
 
 router = Router()
