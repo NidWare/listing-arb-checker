@@ -63,37 +63,50 @@ class GateClient:
                     if response.status == 200:
                         try:
                             data = await response.json()
+                            logging.debug(f"Raw API response for {currency}: {data}")
+                            
                             if not isinstance(data, dict):
-                                logging.error(f"Unexpected response format for {currency}: {data}")
+                                logging.error(f"Unexpected response format for {currency}: {type(data)}, value: {data}")
                                 return []
                                 
                             chains = data.get('chains', [])
+                            logging.debug(f"Extracted chains data for {currency}: {chains}")
+                            
                             if not isinstance(chains, list):
-                                logging.error(f"Unexpected chains format for {currency}: {chains}")
+                                logging.error(f"Unexpected chains format for {currency}: type: {type(chains)}, value: {chains}")
                                 return []
                                 
                             logging.debug(f"Found {len(chains)} chains for {currency}")
                             result = []
-                            for chain in chains:
+                            for idx, chain in enumerate(chains):
+                                logging.debug(f"Processing chain {idx + 1}/{len(chains)} for {currency}: {chain}")
+                                
                                 if not isinstance(chain, dict):
-                                    logging.warning(f"Invalid chain format: {chain}")
+                                    logging.warning(f"Invalid chain format at index {idx}: type: {type(chain)}, value: {chain}")
                                     continue
                                     
                                 chain_name = chain.get('name')
                                 addr = chain.get('addr')
+                                logging.debug(f"Chain {idx + 1} data - name: {chain_name} ({type(chain_name)}), addr: {addr} ({type(addr)})")
+                                
                                 if chain_name and addr and isinstance(chain_name, str) and isinstance(addr, str):
                                     result.append((chain_name, addr))
                                     logging.debug(f"Added chain {chain_name} with address for {currency}")
                                 else:
-                                    logging.warning(f"Invalid chain data - name: {chain_name}, addr: {addr}")
+                                    logging.warning(f"Invalid chain data at index {idx} - name: {chain_name} ({type(chain_name)}), addr: {addr} ({type(addr)})")
                                     
-                            logging.info(f"Successfully retrieved {len(result)} valid chains for {currency}")
+                            logging.info(f"Successfully retrieved {len(result)} valid chains for {currency}. Final result: {result}")
                             return result
                         except Exception as e:
-                            logging.error(f"Error parsing response for {currency}: {str(e)}")
+                            logging.error(f"Error parsing response for {currency}: {str(e)}", exc_info=True)
                             return []
                     logging.warning(f"Failed to fetch currency chains for {currency}. Status code: {response.status}")
+                    try:
+                        error_body = await response.text()
+                        logging.warning(f"Error response body: {error_body}")
+                    except Exception as e:
+                        logging.warning(f"Could not read error response: {str(e)}")
                     return []
         except Exception as e:
-            logging.error(f"Error in get_currency_chains for {currency}: {str(e)}")
+            logging.error(f"Error in get_currency_chains for {currency}: {str(e)}", exc_info=True)
             return []
