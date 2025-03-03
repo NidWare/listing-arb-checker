@@ -6,6 +6,8 @@ from aiogram.client.default import DefaultBotProperties
 from handlers.exchange_handlers import router as exchange_router
 from config.config_manager import ConfigManager
 from services.exchange_service import ExchangeService
+from middlewares.message_logging import MessageLoggingMiddleware
+from admin_bot import start_admin_bot
 
 # Configure logging with more detail
 logging.basicConfig(
@@ -28,20 +30,23 @@ bot = Bot(
 )
 dp = Dispatcher()
 
+# Register message logging middleware
+dp.message.middleware(MessageLoggingMiddleware())
+
 # Register routers
 dp.include_router(exchange_router)
 
 # Create a single instance of ExchangeService
 exchange_service = ExchangeService()
 
-async def main():
+async def start_main_bot():
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Starting bot in polling mode...")
+        logger.info("Starting main bot in polling mode...")
         
         # Additional startup logging
         me = await bot.get_me()
-        logger.info(f"Bot started successfully! Username: @{me.username}")
+        logger.info(f"Main bot started successfully! Username: @{me.username}")
         
         # Start polling with enhanced error handling
         await dp.start_polling(bot, allowed_updates=[
@@ -50,17 +55,28 @@ async def main():
             "inline_query"
         ])
     except Exception as e:
-        logger.error(f"Critical error during bot startup: {str(e)}", exc_info=True)
+        logger.error(f"Critical error during main bot startup: {str(e)}", exc_info=True)
         raise
     finally:
-        logger.info("Bot stopped")
+        logger.info("Main bot stopped")
         await exchange_service.close()
         await bot.session.close()
+
+async def main():
+    try:
+        # Run both bots concurrently
+        await asyncio.gather(
+            start_main_bot(),
+            start_admin_bot()
+        )
+    except Exception as e:
+        logger.error(f"Error running bots: {str(e)}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped by user")
+        logger.info("Bots stopped by user")
     except Exception as e:
         logger.critical(f"Unhandled exception: {str(e)}", exc_info=True) 
