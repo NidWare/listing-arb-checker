@@ -10,12 +10,20 @@ from datetime import datetime
 from dex.dex_tools import DexTools
 import os
 
+# Global constants
+PRICE_CHECK_INTERVAL = 60  # seconds
+MIN_ARBITRAGE_PERCENTAGE = 0.1  # 0.1%
+
+# Track active monitoring tasks
+active_monitors = {}
+
+# Store temporary user queries while waiting for min percentage input
+user_queries = {}
+
+# Create a router instance
 router = Router()
 exchange_service = ExchangeService()
 logger = logging.getLogger(__name__)
-
-# Store active monitoring tasks per chat
-active_monitors: Dict[int, asyncio.Task] = {}
 
 # Store admin IDs
 ADMIN_IDS: Set[int] = {741239404, 180247888}
@@ -102,7 +110,7 @@ async def cmd_chat_info(message: Message):
         except Exception as e2:
             logger.error(f"Error sending fallback message: {str(e2)}", exc_info=True)
 
-async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> List[Dict]:
+async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min_arbitrage_percentage: float = MIN_ARBITRAGE_PERCENTAGE) -> List[Dict]:
     """Calculate all possible arbitrage opportunities between exchanges and DEX"""
     opportunities = []
     exchanges = [ex for ex in prices.keys() if not prices[ex].get('is_dex', False)]
@@ -140,7 +148,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                 logger.debug(f"CEX->DEX Spot: {ex}->{dex}: {cex_spot_price:.4f}->{dex_price:.4f} = {cex_to_dex_percentage:.2f}%")
                 
                 # Add DEX -> CEX opportunity if profitable
-                if dex_to_cex_percentage >= 0.1:
+                if dex_to_cex_percentage >= min_arbitrage_percentage:
                     logger.info(f"Found DEX->CEX Spot opportunity with {dex_to_cex_percentage:.2f}%")
                     opportunities.append({
                         'type': 'dex_to_cex_spot',
@@ -153,7 +161,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                     })
                 
                 # Add CEX -> DEX opportunity if profitable
-                if cex_to_dex_percentage >= 0.1:
+                if cex_to_dex_percentage >= min_arbitrage_percentage:
                     logger.info(f"Found CEX->DEX Spot opportunity with {cex_to_dex_percentage:.2f}%")
                     opportunities.append({
                         'type': 'cex_to_dex_spot',
@@ -179,7 +187,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                 logger.debug(f"CEX->DEX Futures: {ex}->{dex}: {cex_futures_price:.4f}->{dex_price:.4f} = {cex_to_dex_percentage:.2f}%")
                 
                 # Add DEX -> CEX Futures opportunity if profitable
-                if dex_to_cex_percentage >= 0.1:
+                if dex_to_cex_percentage >= min_arbitrage_percentage:
                     logger.info(f"Found DEX->CEX Futures opportunity with {dex_to_cex_percentage:.2f}%")
                     opportunities.append({
                         'type': 'dex_to_cex_futures',
@@ -192,7 +200,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                     })
                 
                 # Add CEX -> DEX Futures opportunity if profitable
-                if cex_to_dex_percentage >= 0.1:
+                if cex_to_dex_percentage >= min_arbitrage_percentage:
                     logger.info(f"Found CEX->DEX Futures opportunity with {cex_to_dex_percentage:.2f}%")
                     opportunities.append({
                         'type': 'cex_to_dex_futures',
@@ -223,7 +231,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                     logger.debug(f"CEX Spot {ex2}->{ex1}: {price2:.4f}->{price1:.4f} = {percentage2:.2f}%")
                     
                     # Add opportunity if profitable in either direction
-                    if percentage1 >= 0.1:
+                    if percentage1 >= min_arbitrage_percentage:
                         logger.info(f"Found CEX->CEX Spot opportunity: {ex1}->{ex2} with {percentage1:.2f}%")
                         opportunities.append({
                             'type': 'cross_exchange_spot',
@@ -234,7 +242,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                             'spread': spread,
                             'percentage': percentage1
                         })
-                    if percentage2 >= 0.1:
+                    if percentage2 >= min_arbitrage_percentage:
                         logger.info(f"Found CEX->CEX Spot opportunity: {ex2}->{ex1} with {percentage2:.2f}%")
                         opportunities.append({
                             'type': 'cross_exchange_spot',
@@ -259,7 +267,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                     logger.debug(f"CEX Futures {ex2}->{ex1}: {price2:.4f}->{price1:.4f} = {percentage2:.2f}%")
                     
                     # Add opportunity if profitable in either direction
-                    if percentage1 >= 0.1:
+                    if percentage1 >= min_arbitrage_percentage:
                         logger.info(f"Found CEX->CEX Futures opportunity: {ex1}->{ex2} with {percentage1:.2f}%")
                         opportunities.append({
                             'type': 'cross_exchange_futures',
@@ -270,7 +278,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                             'spread': spread,
                             'percentage': percentage1
                         })
-                    if percentage2 >= 0.1:
+                    if percentage2 >= min_arbitrage_percentage:
                         logger.info(f"Found CEX->CEX Futures opportunity: {ex2}->{ex1} with {percentage2:.2f}%")
                         opportunities.append({
                             'type': 'cross_exchange_futures',
@@ -292,7 +300,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                     percentage = calc_percentage(spot_price, futures_price)
                     logger.debug(f"CEX Spot->Futures {ex1}->{ex2}: {spot_price:.4f}->{futures_price:.4f} = {percentage:.2f}%")
                     
-                    if percentage >= 0.1:
+                    if percentage >= min_arbitrage_percentage:
                         logger.info(f"Found CEX Spot->Futures opportunity: {ex1}->{ex2} with {percentage:.2f}%")
                         opportunities.append({
                             'type': 'cross_exchange_spot_futures',
@@ -314,7 +322,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                     percentage = calc_percentage(futures_price, spot_price)
                     logger.debug(f"CEX Futures->Spot {ex1}->{ex2}: {futures_price:.4f}->{spot_price:.4f} = {percentage:.2f}%")
                     
-                    if percentage >= 0.1:
+                    if percentage >= min_arbitrage_percentage:
                         logger.info(f"Found CEX Futures->Spot opportunity: {ex1}->{ex2} with {percentage:.2f}%")
                         opportunities.append({
                             'type': 'cross_exchange_futures_spot',
@@ -336,7 +344,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                     percentage = calc_percentage(spot_price, futures_price)
                     logger.debug(f"Same CEX Spot->Futures {ex1}: {spot_price:.4f}->{futures_price:.4f} = {percentage:.2f}%")
                     
-                    if percentage >= 0.1:
+                    if percentage >= min_arbitrage_percentage:
                         logger.info(f"Found same-exchange Spot->Futures opportunity on {ex1} with {percentage:.2f}%")
                         opportunities.append({
                             'type': 'same_exchange_spot_futures',
@@ -415,10 +423,10 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
     result.append("</pre>")
     return "\n".join(result)
 
-async def monitor_prices(chat_id: int, query: str, bot):
+async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0.1):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
-        price_monitor = ArbitragePriceMonitor(query, bot)
+        price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage)
         await price_monitor.start_monitoring()
     except asyncio.CancelledError:
         logger.info(f"Monitoring stopped for {query}")
@@ -431,9 +439,10 @@ async def monitor_prices(chat_id: int, query: str, bot):
 class ArbitragePriceMonitor:
     """Class for monitoring prices and detecting arbitrage opportunities"""
     
-    def __init__(self, query: str, bot):
+    def __init__(self, query: str, bot, min_arbitrage_percentage: float = 0.1):
         self.query = query
         self.bot = bot
+        self.min_arbitrage_percentage = min_arbitrage_percentage
         self.last_opportunities = set()
         self.alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
         self.topic_id = int(os.getenv("TOPIC_ID", "1"))
@@ -599,12 +608,12 @@ class ArbitragePriceMonitor:
     async def _process_arbitrage_opportunities(self, prices: Dict[str, Dict[str, Any]]):
         """Process and alert about arbitrage opportunities"""
         # Calculate arbitrage opportunities
-        opportunities = await calculate_arbitrage(prices)
+        opportunities = await calculate_arbitrage(prices, self.min_arbitrage_percentage)
         
-        # Filter significant opportunities (>= 0.2%) and exclude same-exchange opportunities
+        # Filter significant opportunities (>= MIN_ARBITRAGE_PERCENTAGE) and exclude same-exchange opportunities
         significant_opportunities = [
             opp for opp in opportunities
-            if opp['percentage'] >= 0.2 and opp['type'] != 'same_exchange_spot_futures'
+            if opp['percentage'] >= self.min_arbitrage_percentage and opp['type'] != 'same_exchange_spot_futures'
         ]
         
         # Generate unique IDs for each opportunity
@@ -838,6 +847,34 @@ async def handle_search(message: Message):
         await message.answer("Please send a valid coin name")
         return
 
+    # Ask for minimum arbitrage percentage
+    await message.answer("Please enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
+    
+    # Store the query information to start monitoring after getting the percentage
+    user_queries[chat_id] = query
+    return
+
+@router.message(lambda message: message.chat.id in user_queries)
+async def handle_min_percentage(message: Message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
+    topic_id = int(os.getenv("TOPIC_ID", "1"))
+    bot = message.bot
+    
+    # Get the stored query
+    query = user_queries.pop(chat_id)
+    
+    # Parse the minimum percentage
+    try:
+        min_percentage = float(message.text.strip())
+        if min_percentage <= 0:
+            await message.answer("Minimum percentage must be greater than 0. Please try again.")
+            return
+    except ValueError:
+        await message.answer("Please enter a valid number (e.g., 0.5 for 0.5%)")
+        return
+    
     try:
         # Cancel existing monitoring task if any
         if chat_id in active_monitors:
@@ -847,29 +884,23 @@ async def handle_search(message: Message):
         # Send initial message to alert group
         await bot.send_message(
             chat_id=alert_group_id,
-            text=f"🔍 Starting price monitoring for {query}...",
+            text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...",
             message_thread_id=topic_id
         )
         
-        # Start new monitoring task with the target chat ID and bot instance
-        task = asyncio.create_task(monitor_prices(chat_id, query, bot))
+        # Start new monitoring task with the target chat ID, bot instance, and minimum percentage
+        task = asyncio.create_task(monitor_prices(chat_id, query, bot, min_percentage))
         active_monitors[chat_id] = task
         
         # Send confirmation to both alert group and admin
         await bot.send_message(
             chat_id=alert_group_id,
-            text="✅ Monitoring started!\n\n"
-                 "I will notify you when there are arbitrage opportunities with >2% difference.\n"
+            text=f"✅ Monitoring started for {query}!\n\n"
+                 f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
                  "Use /stop command to stop monitoring.",
             message_thread_id=topic_id
         )
         
-        await message.answer("✅ Monitoring started in the alert group!")
-
+        await message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%")
     except Exception as e:
-        logger.error(f"Error in handle_search: {str(e)}", exc_info=True)
-        try:
-            # Send error to admin in private chat
-            await message.answer(f"❌ Error occurred while searching: {str(e)}")
-        except Exception as e2:
-            logger.error(f"Error sending error message: {str(e2)}", exc_info=True) 
+        await message.answer(f"❌ Error starting monitoring: {str(e)}") 
