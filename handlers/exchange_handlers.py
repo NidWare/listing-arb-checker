@@ -746,28 +746,31 @@ class ArbitragePriceMonitor:
             # CEX to CEX Spot
             elif opp['type'] == 'cross_exchange_spot' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
                 alert_msg += (
-                    f"Type: Spot-to-Spot\n"
+                    f"Type: CEX to CEX Spot\n"
                     f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
                     f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             
             # CEX to CEX Futures
             elif opp['type'] == 'cross_exchange_futures' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
                 alert_msg += (
-                    f"Type: Futures-to-Futures\n"
+                    f"Type: CEX to CEX Futures\n"
                     f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
                     f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             
             # CEX Spot to CEX Futures (Cross-exchange)
             elif opp['type'] == 'cross_exchange_spot_futures' and all(k in opp for k in ['spot_exchange', 'futures_exchange', 'spot_price', 'futures_price', 'percentage']):
                 alert_msg += (
-                    f"Type: Spot-to-Futures\n"
+                    f"Type: CEX Spot to CEX Futures\n"
                     f"Buy on: {opp['spot_exchange'].upper()} (Spot) at ${opp['spot_price']:.4f}\n"
                     f"Sell on: {opp['futures_exchange'].upper()} (Futures) at ${opp['futures_price']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             else:
                 logger.warning(f"Invalid or incomplete opportunity data: {opp}")
