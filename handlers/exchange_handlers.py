@@ -577,7 +577,7 @@ class ArbitragePriceMonitor:
         # Add DEX prices
         for exchange, price_data in prices.items():
             if price_data.get('is_dex', False) and price_data.get('spot'):
-                price_message += f"DEX ({exchange.upper()}): ${price_data['spot']:.4f}\n"
+                price_message += f"DEX ({exchange.upper()}): ${price_data['spot']:.4f}\n\n"
         
         # Add CEX prices
         for exchange in self.cex_exchanges:
