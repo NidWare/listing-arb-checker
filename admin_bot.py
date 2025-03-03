@@ -141,27 +141,17 @@ async def handle_min_percentage(message: Message):
             active_monitors[chat_id].cancel()
             del active_monitors[chat_id]
 
-        # Send initial message
-        await message.bot.send_message(
-            chat_id,
-            f"🔍 Starting price monitoring for {coin} with minimum arbitrage of {min_percentage}%...",
-            message_thread_id=topic_id
-        )
+        # Send status message ONLY to the admin who initiated the command
+        await message.answer(f"🔍 Starting price monitoring for {coin} with minimum arbitrage of {min_percentage}%...")
 
         # Start new monitoring task with the custom min_arbitrage_percentage
         task = asyncio.create_task(monitor_prices(chat_id, coin, admin_bot, min_percentage))
         active_monitors[chat_id] = task
 
-        await message.bot.send_message(
-            chat_id,
-            f"✅ Monitoring started for {coin}!\n\n"
-            f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
-            "Use /stop_monitor command to stop monitoring.",
-            message_thread_id=topic_id
-        )
-        
-        # Also send confirmation to the admin
-        await message.answer(f"✅ Started monitoring {coin} with minimum arbitrage set to {min_percentage}%")
+        # Send confirmation ONLY to the admin who initiated the command
+        await message.answer(f"✅ Monitoring started for {coin}!\n\n"
+                             f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
+                             "Use /stop_monitor command to stop monitoring.")
 
     except Exception as e:
         logger.error(f"Error starting monitoring: {str(e)}", exc_info=True)
@@ -176,22 +166,15 @@ async def cmd_stop_monitor(message: Message):
 
     # Use the supergroup ID for monitoring
     chat_id = ConfigManager.get_alert_group_id()
-    topic_id = int(os.getenv("TOPIC_ID", "1"))
 
     if chat_id in active_monitors:
         active_monitors[chat_id].cancel()
         del active_monitors[chat_id]
-        await message.bot.send_message(
-            chat_id,
-            "✅ Monitoring stopped",
-            message_thread_id=topic_id
-        )
+        
+        # Send "Monitoring stopped" message ONLY to the admin who initiated the command
+        await message.answer("✅ Monitoring stopped")
     else:
-        await message.bot.send_message(
-            chat_id,
-            "❌ No active monitoring found",
-            message_thread_id=topic_id
-        )
+        await message.answer("❌ No active monitoring found")
 
 @admin_router.message()
 async def debug_chat_info(message: Message):
