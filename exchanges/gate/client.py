@@ -1,4 +1,5 @@
 import aiohttp
+import logging
 from typing import Dict, Any, List, Optional, Tuple
 
 class GateClient:
@@ -53,17 +54,23 @@ class GateClient:
         Returns:
             List of tuples (chain_name, address) where address is not empty.
         """
+        logging.debug(f"Fetching currency chains for {currency}")
         async with aiohttp.ClientSession(headers=self._get_headers()) as session:
             url = f"{self.base_url}/spot/currencies/{currency}"
+            logging.debug(f"Making request to {url}")
             async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
                     chains = data.get('chains', [])
+                    logging.debug(f"Found {len(chains)} chains for {currency}")
                     result = []
                     for chain in chains:
                         chain_name = chain.get('name')
                         addr = chain.get('addr')
                         if chain_name and addr:  # Only include pairs where address exists
                             result.append((chain_name, addr))
+                            logging.debug(f"Added chain {chain_name} with address for {currency}")
+                    logging.info(f"Successfully retrieved {len(result)} valid chains for {currency}")
                     return result
+                logging.warning(f"Failed to fetch currency chains for {currency}. Status code: {response.status}")
                 return []
