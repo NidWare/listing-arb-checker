@@ -436,6 +436,7 @@ async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage
     try:
         # Get the filter preference for this chat_id
         filter_mode = user_filter_preferences.get(chat_id, "all")  # Default to showing all
+        logger.info(f"Starting monitoring for {query} with filter mode: {filter_mode}")
         price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage, filter_mode)
         await price_monitor.start_monitoring()
     except asyncio.CancelledError:

@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import os
-from aiogram import Router
-from aiogram.types import Message
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config.config_manager import ConfigManager
-from handlers.exchange_handlers import monitor_prices
+from handlers.exchange_handlers import monitor_prices, user_filter_preferences
 from commands.bot_instance import get_bot_instance
 
 # Configure logging
@@ -19,6 +20,23 @@ active_monitors = {}
 
 # Store temporary user queries while waiting for min percentage input
 user_queries = {}
+
+def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
+    """Create a keyboard for selecting filter mode"""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(
+        text="CEX-CEX Only",
+        callback_data="filter_cex_only"
+    )
+    
+    builder.button(
+        text="CEX-CEX + DEX",
+        callback_data="filter_all"
+    )
+    
+    builder.adjust(1)
+    return builder.as_markup()
 
 @monitor_router.message(Command("monitor"))
 async def cmd_monitor(message: Message):
@@ -35,12 +53,54 @@ async def cmd_monitor(message: Message):
 
     coin = args[1].upper()
     
-    # Ask for minimum arbitrage percentage
-    await message.answer(f"Coin: {coin}\nPlease enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
-    
-    # Store the query information to start monitoring after getting the percentage
+    # Store the query information
     user_queries[message.from_user.id] = coin
-    logger.info(f"Added user {message.from_user.id} to user_queries with coin {coin}")
+    
+    # Ask for filter mode first
+    await message.answer(
+        f"Coin: {coin}\nPlease select which opportunities to monitor:",
+        reply_markup=get_filter_mode_keyboard()
+    )
+    logger.info(f"Sent filter selection keyboard to user {message.from_user.id} for coin {coin}")
+
+@monitor_router.callback_query(F.data.startswith("filter_"))
+async def handle_filter_mode_callback(callback: CallbackQuery):
+    """Handle filter mode selection"""
+    user_id = callback.from_user.id
+    
+    logger.info(f"Received filter callback from user {user_id}: {callback.data}")
+    
+    if user_id not in ConfigManager.get_admin_user_ids():
+        logger.warning(f"Non-admin user {user_id} attempted to change filter settings")
+        await callback.answer("Only admins can change filter settings", show_alert=True)
+        return
+    
+    # Extract filter mode from callback data
+    filter_mode = callback.data.split("_")[1]  # "cex_only" or "all"
+    
+    # Get the group ID where opportunities will be posted
+    chat_id = ConfigManager.get_alert_group_id()
+    
+    # Store the user's preference
+    user_filter_preferences[chat_id] = filter_mode
+    logger.info(f"Set filter mode for user {user_id} to {filter_mode}")
+    
+    # Get the stored query
+    coin = user_queries.get(user_id)
+    if not coin:
+        await callback.answer("No coin found. Please use /monitor command again.")
+        return
+    
+    if filter_mode == "cex_only":
+        mode_text = "CEX-CEX Only (no DEX)"
+    else:
+        mode_text = "CEX-CEX + DEX"
+    
+    # Always answer the callback to prevent the "loading" state
+    await callback.answer(f"Filter set to: {mode_text}")
+    
+    # Ask for the minimum arbitrage percentage
+    await callback.message.answer(f"Coin: {coin}\nFilter mode: {mode_text}\n\nPlease enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
     
 @monitor_router.message(Command("cancel"))
 async def cmd_cancel(message: Message):
@@ -93,18 +153,25 @@ async def handle_min_percentage(message: Message):
 
         # Get bot instance
         admin_bot = get_bot_instance()
+        
+        # Get the user's filter preference (default to "all" if not set)
+        filter_mode = user_filter_preferences.get(chat_id, "all")
+        filter_mode_text = "CEX-CEX Only" if filter_mode == "cex_only" else "CEX-CEX + DEX"
 
         # Send status message ONLY to the admin who initiated the command
-        await message.answer(f"🔍 Starting price monitoring for {coin} with minimum arbitrage of {min_percentage}%...")
+        await message.answer(f"🔍 Starting price monitoring for {coin} with minimum arbitrage of {min_percentage}%...\nFilter mode: {filter_mode_text}")
 
-        # Start new monitoring task with the custom min_arbitrage_percentage
+        # Start new monitoring task with the custom min_arbitrage_percentage and filter mode
         task = asyncio.create_task(monitor_prices(chat_id, coin, admin_bot, min_percentage))
         active_monitors[chat_id] = task
 
         # Send confirmation ONLY to the admin who initiated the command
-        await message.answer(f"✅ Monitoring started for {coin}!\n\n"
-                             f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
-                             "Use /stop_monitor command to stop monitoring.")
+        await message.answer(
+            f"✅ Monitoring started for {coin}!\n\n"
+            f"Filter mode: {filter_mode_text}\n"
+            f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
+            "Use /stop_monitor command to stop monitoring."
+        )
 
     except Exception as e:
         logger.error(f"Error starting monitoring: {str(e)}", exc_info=True)
