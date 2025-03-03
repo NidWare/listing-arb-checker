@@ -1,6 +1,6 @@
 from aiogram import Router, F
 from aiogram.filters import Command, ChatMemberUpdatedFilter
-from aiogram.types import Message, ChatMemberUpdated
+from aiogram.types import Message, ChatMemberUpdated, CallbackQuery
 from aiogram.enums.chat_member_status import ChatMemberStatus
 from services.exchange_service import ExchangeService
 import logging
@@ -19,6 +19,9 @@ active_monitors = {}
 
 # Store temporary user queries while waiting for min percentage input
 user_queries = {}
+
+# Store user filter preferences
+user_filter_preferences = {}  # Format: {chat_id: "cex_only" or "all"}
 
 # Create a router instance
 router = Router()
@@ -110,7 +113,7 @@ async def cmd_chat_info(message: Message):
         except Exception as e2:
             logger.error(f"Error sending fallback message: {str(e2)}", exc_info=True)
 
-async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min_arbitrage_percentage: float = MIN_ARBITRAGE_PERCENTAGE) -> List[Dict]:
+async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min_arbitrage_percentage: float = MIN_ARBITRAGE_PERCENTAGE, filter_mode: str = "all") -> List[Dict]:
     """Calculate all possible arbitrage opportunities between exchanges and DEX"""
     opportunities = []
     exchanges = [ex for ex in prices.keys() if not prices[ex].get('is_dex', False)]
@@ -118,101 +121,103 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
     
     logger.info(f"Found DEX chains: {dex_chains}")
     logger.info(f"Found CEX exchanges: {exchanges}")
+    logger.info(f"Filter mode: {filter_mode}")
     
     # Helper function to calculate percentage difference
     def calc_percentage(buy_price: float, sell_price: float) -> float:
         return ((sell_price - buy_price) / buy_price) * 100
     
-    # Compare DEX to CEX opportunities
-    for dex in dex_chains:
-        dex_price = prices[dex]['spot']  # DEX only has spot price
-        if not dex_price:
-            logger.warning(f"No price found for DEX {dex}")
-            continue
+    # Compare DEX to CEX opportunities (only if not in CEX-only mode)
+    if filter_mode == "all":
+        for dex in dex_chains:
+            dex_price = prices[dex]['spot']  # DEX only has spot price
+            if not dex_price:
+                logger.warning(f"No price found for DEX {dex}")
+                continue
+                
+            logger.info(f"Processing DEX {dex} with price ${dex_price:.4f}")
             
-        logger.info(f"Processing DEX {dex} with price ${dex_price:.4f}")
-        
-        for ex in exchanges:
-            logger.debug(f"Comparing with CEX {ex}")
-            # DEX to CEX Spot
-            if prices[ex]['spot']:
-                cex_spot_price = prices[ex]['spot']
-                spread = abs(cex_spot_price - dex_price)
+            for ex in exchanges:
+                logger.debug(f"Comparing with CEX {ex}")
+                # DEX to CEX Spot
+                if prices[ex]['spot']:
+                    cex_spot_price = prices[ex]['spot']
+                    spread = abs(cex_spot_price - dex_price)
+                    
+                    # Check DEX -> CEX opportunity
+                    dex_to_cex_percentage = calc_percentage(dex_price, cex_spot_price)
+                    logger.debug(f"DEX->CEX Spot: {dex}->{ex}: {dex_price:.4f}->{cex_spot_price:.4f} = {dex_to_cex_percentage:.2f}%")
+                    
+                    # Check CEX -> DEX opportunity
+                    cex_to_dex_percentage = calc_percentage(cex_spot_price, dex_price)
+                    logger.debug(f"CEX->DEX Spot: {ex}->{dex}: {cex_spot_price:.4f}->{dex_price:.4f} = {cex_to_dex_percentage:.2f}%")
+                    
+                    # Add DEX -> CEX opportunity if profitable
+                    if dex_to_cex_percentage >= min_arbitrage_percentage:
+                        logger.info(f"Found DEX->CEX Spot opportunity with {dex_to_cex_percentage:.2f}%")
+                        opportunities.append({
+                            'type': 'dex_to_cex_spot',
+                            'dex': dex,
+                            'cex': ex,
+                            'dex_price': dex_price,
+                            'cex_price': cex_spot_price,
+                            'spread': spread,
+                            'percentage': dex_to_cex_percentage
+                        })
+                    
+                    # Add CEX -> DEX opportunity if profitable
+                    if cex_to_dex_percentage >= min_arbitrage_percentage:
+                        logger.info(f"Found CEX->DEX Spot opportunity with {cex_to_dex_percentage:.2f}%")
+                        opportunities.append({
+                            'type': 'cex_to_dex_spot',
+                            'dex': dex,
+                            'cex': ex,
+                            'dex_price': dex_price,
+                            'cex_price': cex_spot_price,
+                            'spread': spread,
+                            'percentage': cex_to_dex_percentage
+                        })
                 
-                # Check DEX -> CEX opportunity
-                dex_to_cex_percentage = calc_percentage(dex_price, cex_spot_price)
-                logger.debug(f"DEX->CEX Spot: {dex}->{ex}: {dex_price:.4f}->{cex_spot_price:.4f} = {dex_to_cex_percentage:.2f}%")
-                
-                # Check CEX -> DEX opportunity
-                cex_to_dex_percentage = calc_percentage(cex_spot_price, dex_price)
-                logger.debug(f"CEX->DEX Spot: {ex}->{dex}: {cex_spot_price:.4f}->{dex_price:.4f} = {cex_to_dex_percentage:.2f}%")
-                
-                # Add DEX -> CEX opportunity if profitable
-                if dex_to_cex_percentage >= min_arbitrage_percentage:
-                    logger.info(f"Found DEX->CEX Spot opportunity with {dex_to_cex_percentage:.2f}%")
-                    opportunities.append({
-                        'type': 'dex_to_cex_spot',
-                        'dex': dex,
-                        'cex': ex,
-                        'dex_price': dex_price,
-                        'cex_price': cex_spot_price,
-                        'spread': spread,
-                        'percentage': dex_to_cex_percentage
-                    })
-                
-                # Add CEX -> DEX opportunity if profitable
-                if cex_to_dex_percentage >= min_arbitrage_percentage:
-                    logger.info(f"Found CEX->DEX Spot opportunity with {cex_to_dex_percentage:.2f}%")
-                    opportunities.append({
-                        'type': 'cex_to_dex_spot',
-                        'dex': dex,
-                        'cex': ex,
-                        'dex_price': dex_price,
-                        'cex_price': cex_spot_price,
-                        'spread': spread,
-                        'percentage': cex_to_dex_percentage
-                    })
-            
-            # DEX to CEX Futures
-            if prices[ex]['futures']:
-                cex_futures_price = prices[ex]['futures']
-                spread = abs(cex_futures_price - dex_price)
-                
-                # Check DEX -> CEX Futures opportunity
-                dex_to_cex_percentage = calc_percentage(dex_price, cex_futures_price)
-                logger.debug(f"DEX->CEX Futures: {dex}->{ex}: {dex_price:.4f}->{cex_futures_price:.4f} = {dex_to_cex_percentage:.2f}%")
-                
-                # Check CEX -> DEX Futures opportunity
-                cex_to_dex_percentage = calc_percentage(cex_futures_price, dex_price)
-                logger.debug(f"CEX->DEX Futures: {ex}->{dex}: {cex_futures_price:.4f}->{dex_price:.4f} = {cex_to_dex_percentage:.2f}%")
-                
-                # Add DEX -> CEX Futures opportunity if profitable
-                if dex_to_cex_percentage >= min_arbitrage_percentage:
-                    logger.info(f"Found DEX->CEX Futures opportunity with {dex_to_cex_percentage:.2f}%")
-                    opportunities.append({
-                        'type': 'dex_to_cex_futures',
-                        'dex': dex,
-                        'cex': ex,
-                        'dex_price': dex_price,
-                        'cex_price': cex_futures_price,
-                        'spread': spread,
-                        'percentage': dex_to_cex_percentage
-                    })
-                
-                # Add CEX -> DEX Futures opportunity if profitable
-                if cex_to_dex_percentage >= min_arbitrage_percentage:
-                    logger.info(f"Found CEX->DEX Futures opportunity with {cex_to_dex_percentage:.2f}%")
-                    opportunities.append({
-                        'type': 'cex_to_dex_futures',
-                        'dex': dex,
-                        'cex': ex,
-                        'dex_price': dex_price,
-                        'cex_price': cex_futures_price,
-                        'spread': spread,
-                        'percentage': cex_to_dex_percentage
-                    })
+                # DEX to CEX Futures
+                if prices[ex]['futures']:
+                    cex_futures_price = prices[ex]['futures']
+                    spread = abs(cex_futures_price - dex_price)
+                    
+                    # Check DEX -> CEX Futures opportunity
+                    dex_to_cex_percentage = calc_percentage(dex_price, cex_futures_price)
+                    logger.debug(f"DEX->CEX Futures: {dex}->{ex}: {dex_price:.4f}->{cex_futures_price:.4f} = {dex_to_cex_percentage:.2f}%")
+                    
+                    # Check CEX -> DEX Futures opportunity
+                    cex_to_dex_percentage = calc_percentage(cex_futures_price, dex_price)
+                    logger.debug(f"CEX->DEX Futures: {ex}->{dex}: {cex_futures_price:.4f}->{dex_price:.4f} = {cex_to_dex_percentage:.2f}%")
+                    
+                    # Add DEX -> CEX Futures opportunity if profitable
+                    if dex_to_cex_percentage >= min_arbitrage_percentage:
+                        logger.info(f"Found DEX->CEX Futures opportunity with {dex_to_cex_percentage:.2f}%")
+                        opportunities.append({
+                            'type': 'dex_to_cex_futures',
+                            'dex': dex,
+                            'cex': ex,
+                            'dex_price': dex_price,
+                            'cex_price': cex_futures_price,
+                            'spread': spread,
+                            'percentage': dex_to_cex_percentage
+                        })
+                    
+                    # Add CEX -> DEX Futures opportunity if profitable
+                    if cex_to_dex_percentage >= min_arbitrage_percentage:
+                        logger.info(f"Found CEX->DEX Futures opportunity with {cex_to_dex_percentage:.2f}%")
+                        opportunities.append({
+                            'type': 'cex_to_dex_futures',
+                            'dex': dex,
+                            'cex': ex,
+                            'dex_price': dex_price,
+                            'cex_price': cex_futures_price,
+                            'spread': spread,
+                            'percentage': cex_to_dex_percentage
+                        })
     
-    # Compare all CEX combinations
+    # Compare all CEX combinations (always shown regardless of filter)
     for i in range(len(exchanges)):
         for j in range(len(exchanges)):
             if i != j:
@@ -426,7 +431,9 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
 async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0.1):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
-        price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage)
+        # Get the filter preference for this chat_id
+        filter_mode = user_filter_preferences.get(chat_id, "all")  # Default to showing all
+        price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage, filter_mode)
         await price_monitor.start_monitoring()
     except asyncio.CancelledError:
         logger.info(f"Monitoring stopped for {query}")
@@ -439,10 +446,11 @@ async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage
 class ArbitragePriceMonitor:
     """Class for monitoring prices and detecting arbitrage opportunities"""
     
-    def __init__(self, query: str, bot, min_arbitrage_percentage: float = 0.1):
+    def __init__(self, query: str, bot, min_arbitrage_percentage: float = 0.1, filter_mode: str = "all"):
         self.query = query
         self.bot = bot
         self.min_arbitrage_percentage = min_arbitrage_percentage
+        self.filter_mode = filter_mode  # "all" or "cex_only"
         self.last_opportunities = set()
         self.alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
         self.topic_id = int(os.getenv("TOPIC_ID", "1"))
@@ -607,8 +615,8 @@ class ArbitragePriceMonitor:
     
     async def _process_arbitrage_opportunities(self, prices: Dict[str, Dict[str, Any]]):
         """Process and alert about arbitrage opportunities"""
-        # Calculate arbitrage opportunities
-        opportunities = await calculate_arbitrage(prices, self.min_arbitrage_percentage)
+        # Calculate arbitrage opportunities with the filter mode
+        opportunities = await calculate_arbitrage(prices, self.min_arbitrage_percentage, self.filter_mode)
         
         # Filter significant opportunities (>= MIN_ARBITRAGE_PERCENTAGE) and exclude same-exchange opportunities
         significant_opportunities = [
@@ -847,11 +855,14 @@ async def handle_search(message: Message):
         await message.answer("Please send a valid coin name")
         return
 
-    # Ask for minimum arbitrage percentage
-    await message.answer("Please enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
-    
-    # Store the query information to start monitoring after getting the percentage
+    # Store the query information
     user_queries[chat_id] = query
+    
+    # Ask for filter mode first
+    await message.answer(
+        "Please select which opportunities to monitor:",
+        reply_markup=get_filter_mode_keyboard()
+    )
     return
 
 @router.message(lambda message: message.chat.id in user_queries)
@@ -864,6 +875,9 @@ async def handle_min_percentage(message: Message):
     
     # Get the stored query
     query = user_queries.pop(chat_id)
+    
+    # Get the user's filter preference (default to "all" if not set)
+    filter_mode = user_filter_preferences.get(chat_id, "all")
     
     # Parse the minimum percentage
     try:
@@ -881,14 +895,17 @@ async def handle_min_percentage(message: Message):
             active_monitors[chat_id].cancel()
             del active_monitors[chat_id]
         
+        # Get filter mode text for display
+        filter_mode_text = "CEX-CEX Only" if filter_mode == "cex_only" else "CEX-CEX + DEX"
+        
         # Send initial message to alert group
         await bot.send_message(
             chat_id=alert_group_id,
-            text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...",
+            text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...\nFilter mode: {filter_mode_text}",
             message_thread_id=topic_id
         )
         
-        # Start new monitoring task with the target chat ID, bot instance, and minimum percentage
+        # Start new monitoring task with the target chat ID, bot instance, minimum percentage, and filter mode
         task = asyncio.create_task(monitor_prices(chat_id, query, bot, min_percentage))
         active_monitors[chat_id] = task
         
@@ -896,11 +913,64 @@ async def handle_min_percentage(message: Message):
         await bot.send_message(
             chat_id=alert_group_id,
             text=f"✅ Monitoring started for {query}!\n\n"
+                 f"Filter mode: {filter_mode_text}\n"
                  f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
                  "Use /stop command to stop monitoring.",
             message_thread_id=topic_id
         )
         
-        await message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%")
+        await message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%\nFilter mode: {filter_mode_text}")
     except Exception as e:
-        await message.answer(f"❌ Error starting monitoring: {str(e)}") 
+        await message.answer(f"❌ Error starting monitoring: {str(e)}")
+
+def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
+    """Create a keyboard for selecting filter mode"""
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(
+        text="CEX-CEX Only",
+        callback_data="filter_cex_only"
+    )
+    
+    builder.button(
+        text="CEX-CEX + DEX",
+        callback_data="filter_all"
+    )
+    
+    builder.adjust(1)
+    return builder.as_markup()
+
+@router.callback_query(F.data.startswith("filter_"))
+async def handle_filter_mode_callback(callback: CallbackQuery):
+    """Handle filter mode selection"""
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    
+    # Check if user is admin
+    if not is_admin(user_id):
+        await callback.answer("Only admins can change filter settings", show_alert=True)
+        return
+    
+    # Extract filter mode from callback data
+    filter_mode = callback.data.split("_")[1]  # "cex_only" or "all"
+    
+    # Store the user's preference
+    user_filter_preferences[chat_id] = filter_mode
+    
+    # Get the stored query or ask for a new one
+    query = user_queries.get(chat_id)
+    
+    if filter_mode == "cex_only":
+        mode_text = "CEX-CEX Only (no DEX)"
+    else:
+        mode_text = "CEX-CEX + DEX"
+    
+    await callback.answer(f"Filter set to: {mode_text}")
+    
+    # If we have a pending query, ask for percentage
+    if query:
+        await callback.message.answer(f"Filter set to: {mode_text}\n\nPlease enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
+    else:
+        await callback.message.answer(f"Filter set to: {mode_text}\n\nPlease send a coin name to start monitoring.") 
