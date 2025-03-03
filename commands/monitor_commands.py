@@ -1,10 +1,10 @@
 import asyncio
 import logging
 import os
-from aiogram import Router, F
+from aiogram import Router
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
-from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.filters import Command, Text
 from config.config_manager import ConfigManager
 from handlers.exchange_handlers import monitor_prices, user_filter_preferences
 from commands.bot_instance import get_bot_instance
@@ -18,8 +18,9 @@ monitor_router = Router(name="monitor_commands")
 # Store active monitoring tasks
 active_monitors = {}
 
-# Store temporary user queries while waiting for min percentage input
-user_queries = {}
+# Store temporary user queries while waiting for filter and percentage input
+# Format: {user_id: {"coin": coin_name, "filter_mode": None or "cex_only"/"all"}}
+user_monitoring_setup = {}
 
 def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
     """Create a keyboard for selecting filter mode"""
@@ -53,17 +54,28 @@ async def cmd_monitor(message: Message):
 
     coin = args[1].upper()
     
-    # Store the query information
-    user_queries[message.from_user.id] = coin
+    # Store the coin and initialize setup
+    user_monitoring_setup[message.from_user.id] = {
+        "coin": coin,
+        "filter_mode": None
+    }
     
-    # Ask for filter mode first
-    await message.answer(
-        f"Coin: {coin}\nPlease select which opportunities to monitor:",
-        reply_markup=get_filter_mode_keyboard()
-    )
-    logger.info(f"Sent filter selection keyboard to user {message.from_user.id} for coin {coin}")
+    # Always ask for filter mode
+    try:
+        keyboard = get_filter_mode_keyboard()
+        await message.answer(
+            f"Coin: {coin}\nStep 1/2: Please select which opportunities to monitor:",
+            reply_markup=keyboard
+        )
+        logger.info(f"Sent filter selection keyboard to user {message.from_user.id} for coin {coin}")
+    except Exception as e:
+        logger.error(f"Error creating or sending filter keyboard: {str(e)}", exc_info=True)
+        # Cancel the setup if there's an error
+        if message.from_user.id in user_monitoring_setup:
+            del user_monitoring_setup[message.from_user.id]
+        await message.answer("❌ An error occurred setting up monitoring. Please try again.")
 
-@monitor_router.callback_query(F.data.startswith("filter_"))
+@monitor_router.callback_query(Text(startswith="filter_"))
 async def handle_filter_mode_callback(callback: CallbackQuery):
     """Handle filter mode selection"""
     user_id = callback.from_user.id
@@ -75,22 +87,22 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
         await callback.answer("Only admins can change filter settings", show_alert=True)
         return
     
+    # Check if user has an active setup
+    if user_id not in user_monitoring_setup:
+        await callback.answer("No active monitoring setup found. Please use /monitor command first.", show_alert=True)
+        return
+    
     # Extract filter mode from callback data
     filter_mode = callback.data.split("_")[1]  # "cex_only" or "all"
     
-    # Get the group ID where opportunities will be posted
-    chat_id = ConfigManager.get_alert_group_id()
-    
-    # Store the user's preference
-    user_filter_preferences[chat_id] = filter_mode
+    # Store the filter mode in the user's setup
+    user_monitoring_setup[user_id]["filter_mode"] = filter_mode
     logger.info(f"Set filter mode for user {user_id} to {filter_mode}")
     
-    # Get the stored query
-    coin = user_queries.get(user_id)
-    if not coin:
-        await callback.answer("No coin found. Please use /monitor command again.")
-        return
+    # Get the stored coin
+    coin = user_monitoring_setup[user_id]["coin"]
     
+    # Prepare the display text
     if filter_mode == "cex_only":
         mode_text = "CEX-CEX Only (no DEX)"
     else:
@@ -99,33 +111,54 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     # Always answer the callback to prevent the "loading" state
     await callback.answer(f"Filter set to: {mode_text}")
     
-    # Ask for the minimum arbitrage percentage
-    await callback.message.answer(f"Coin: {coin}\nFilter mode: {mode_text}\n\nPlease enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
-    
+    # Ask for minimum arbitrage percentage
+    await callback.message.answer(
+        f"Coin: {coin}\nFilter mode: {mode_text}\n\n"
+        f"Step 2/2: Please enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)"
+    )
+
 @monitor_router.message(Command("cancel"))
 async def cmd_cancel(message: Message):
     """Cancel the current monitoring setup process"""
     user_id = message.from_user.id
     
-    if user_id in user_queries:
-        # Remove the query from waiting list
-        coin = user_queries.pop(user_id)
+    if user_id in user_monitoring_setup:
+        # Get the coin being set up
+        coin = user_monitoring_setup[user_id]["coin"]
+        # Clean up
+        del user_monitoring_setup[user_id]
         await message.answer(f"✅ Monitoring setup for {coin} has been cancelled.")
     else:
         await message.answer("No monitoring setup in progress to cancel.")
 
 # This filter needs to run before the catch-all handler in basic_commands
-@monitor_router.message(lambda message: message.from_user.id in user_queries and not message.text.startswith('/'))
+@monitor_router.message(lambda message: message.from_user.id in user_monitoring_setup and not message.text.startswith('/'))
 async def handle_min_percentage(message: Message):
-    logger.info(f"Processing input from user {message.from_user.id} who is in user_queries")
+    logger.info(f"Processing input from user {message.from_user.id} who is in user_monitoring_setup")
     user_id = message.from_user.id
     
     if user_id not in ConfigManager.get_admin_user_ids():
         await message.answer("⚠️ You don't have permission to use this command.")
         return
     
-    # Get the stored coin
-    coin = user_queries.get(user_id)
+    # Get the user's setup data
+    setup_data = user_monitoring_setup.get(user_id)
+    if not setup_data:
+        await message.answer("⚠️ No active setup found. Please use /monitor command.")
+        return
+    
+    # Get the coin and filter mode
+    coin = setup_data["coin"]
+    filter_mode = setup_data["filter_mode"]
+    
+    # Ensure filter mode is set
+    if not filter_mode:
+        # If filter mode is not set, ask for it first
+        await message.answer(
+            f"⚠️ Please select a filter mode for {coin} first:", 
+            reply_markup=get_filter_mode_keyboard()
+        )
+        return
     
     # Parse the minimum percentage
     try:
@@ -137,8 +170,8 @@ async def handle_min_percentage(message: Message):
         await message.answer("Please enter a valid number (e.g., 0.5 for 0.5%). Try again or use /cancel to abort.")
         return
     
-    # Remove the query from the waiting list
-    user_queries.pop(user_id, None)
+    # Remove the setup from the waiting list
+    del user_monitoring_setup[user_id]
     
     # Use the supergroup ID for monitoring
     chat_id = ConfigManager.get_alert_group_id()  # Get from config
@@ -154,14 +187,17 @@ async def handle_min_percentage(message: Message):
         # Get bot instance
         admin_bot = get_bot_instance()
         
-        # Get the user's filter preference (default to "all" if not set)
-        filter_mode = user_filter_preferences.get(chat_id, "all")
+        # Get the display text for the filter mode
         filter_mode_text = "CEX-CEX Only" if filter_mode == "cex_only" else "CEX-CEX + DEX"
+
+        # Store the filter mode for this monitoring session
+        user_filter_preferences[chat_id] = filter_mode
+        logger.info(f"Saved filter mode {filter_mode} for chat_id {chat_id}")
 
         # Send status message ONLY to the admin who initiated the command
         await message.answer(f"🔍 Starting price monitoring for {coin} with minimum arbitrage of {min_percentage}%...\nFilter mode: {filter_mode_text}")
 
-        # Start new monitoring task with the custom min_arbitrage_percentage and filter mode
+        # Start new monitoring task with the custom min_arbitrage_percentage
         task = asyncio.create_task(monitor_prices(chat_id, coin, admin_bot, min_percentage))
         active_monitors[chat_id] = task
 
