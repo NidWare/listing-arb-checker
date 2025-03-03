@@ -27,90 +27,98 @@ async def cmd_start(message: Message):
         "Example: 'BTC' or 'ETH'"
     )
 
-def format_price_comparison(prices: Dict[str, Dict[str, Optional[float]]], symbol: str) -> str:
-    """Format price comparison in monospace table format"""
-    result = [f"💰 Price Comparison for {symbol}:\n"]
-    
-    # Header with monospace formatting
-    result.append(f"<pre>")
-    result.append(f"Exchange  Market   Price    Spread")
-    result.append(f"──────────────────────────────────")
-    
-    # Format each exchange's prices
-    for exchange in prices:
-        spot_price = prices[exchange]['spot']
-        futures_price = prices[exchange]['futures']
-        
-        # Calculate spread percentage between spot and futures
-        if spot_price and futures_price:
-            spread = abs(spot_price - futures_price)
-            spread_pct = (spread / min(spot_price, futures_price)) * 100
-            spread_str = f"{spread_pct:.1f}%"
-        else:
-            spread_str = "N/A"
-        
-        # Format SPOT line
-        if spot_price:
-            result.append(
-                f"{exchange.upper():<8} SPOT    ${spot_price:<7.4f} {spread_str:<6}"
-            )
-        
-        # Format FUTURES line
-        if futures_price:
-            result.append(
-                f"{exchange.upper():<8} FUTURES ${futures_price:<7.4f} {spread_str:<6}"
-            )
-    
-    result.append("</pre>")
-    return "\n".join(result)
-
 async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> List[Dict]:
     """Calculate all possible arbitrage opportunities between exchanges and DEX"""
     opportunities = []
     exchanges = [ex for ex in prices.keys() if not prices[ex].get('is_dex', False)]
     dex_chains = [ex for ex in prices.keys() if prices[ex].get('is_dex', False)]
     
+    logger.info(f"Found DEX chains: {dex_chains}")
+    logger.info(f"Found CEX exchanges: {exchanges}")
+    
     # Helper function to calculate percentage difference
     def calc_percentage(price1: float, price2: float) -> float:
-        return (price2 - price1) / price1 * 100
+        return ((price2 - price1) / price1) * 100
     
     # Compare DEX to CEX opportunities
     for dex in dex_chains:
         dex_price = prices[dex]['spot']  # DEX only has spot price
         if not dex_price:
+            logger.warning(f"No price found for DEX {dex}")
             continue
             
+        logger.info(f"Processing DEX {dex} with price ${dex_price:.4f}")
+        
         for ex in exchanges:
+            logger.debug(f"Comparing with CEX {ex}")
             # DEX to CEX Spot
             if prices[ex]['spot']:
-                if dex_price < prices[ex]['spot']:
-                    spread = prices[ex]['spot'] - dex_price
-                    percentage = calc_percentage(dex_price, prices[ex]['spot'])
-                    
-                    if percentage >= 0.1:
+                cex_spot_price = prices[ex]['spot']
+                spread = abs(cex_spot_price - dex_price)
+                
+                # Calculate percentage based on buy price
+                if dex_price < cex_spot_price:
+                    percentage = ((cex_spot_price - dex_price) / dex_price) * 100
+                    logger.debug(f"DEX->CEX Spot: {dex}->{ex}: {dex_price:.4f}->{cex_spot_price:.4f} = {percentage:.2f}%")
+                else:
+                    percentage = ((dex_price - cex_spot_price) / cex_spot_price) * 100
+                    logger.debug(f"CEX->DEX Spot: {ex}->{dex}: {cex_spot_price:.4f}->{dex_price:.4f} = {percentage:.2f}%")
+                
+                if percentage >= 0.1:
+                    logger.info(f"Found arbitrage opportunity: {'DEX->CEX' if dex_price < cex_spot_price else 'CEX->DEX'} Spot with {percentage:.2f}%")
+                    if dex_price < cex_spot_price:
                         opportunities.append({
                             'type': 'dex_to_cex_spot',
                             'dex': dex,
                             'cex': ex,
                             'dex_price': dex_price,
-                            'cex_price': prices[ex]['spot'],
+                            'cex_price': cex_spot_price,
+                            'spread': spread,
+                            'percentage': percentage
+                        })
+                    else:
+                        opportunities.append({
+                            'type': 'cex_to_dex_spot',
+                            'dex': dex,
+                            'cex': ex,
+                            'dex_price': dex_price,
+                            'cex_price': cex_spot_price,
                             'spread': spread,
                             'percentage': percentage
                         })
             
             # DEX to CEX Futures
             if prices[ex]['futures']:
-                if dex_price < prices[ex]['futures']:
-                    spread = prices[ex]['futures'] - dex_price
-                    percentage = calc_percentage(dex_price, prices[ex]['futures'])
-                    
-                    if percentage >= 0.1:
+                cex_futures_price = prices[ex]['futures']
+                spread = abs(cex_futures_price - dex_price)
+                
+                # Calculate percentage based on buy price
+                if dex_price < cex_futures_price:
+                    percentage = ((cex_futures_price - dex_price) / dex_price) * 100
+                    logger.debug(f"DEX->CEX Futures: {dex}->{ex}: {dex_price:.4f}->{cex_futures_price:.4f} = {percentage:.2f}%")
+                else:
+                    percentage = ((dex_price - cex_futures_price) / cex_futures_price) * 100
+                    logger.debug(f"CEX->DEX Futures: {ex}->{dex}: {cex_futures_price:.4f}->{dex_price:.4f} = {percentage:.2f}%")
+                
+                if percentage >= 0.1:
+                    logger.info(f"Found arbitrage opportunity: {'DEX->CEX' if dex_price < cex_futures_price else 'CEX->DEX'} Futures with {percentage:.2f}%")
+                    if dex_price < cex_futures_price:
                         opportunities.append({
                             'type': 'dex_to_cex_futures',
                             'dex': dex,
                             'cex': ex,
                             'dex_price': dex_price,
-                            'cex_price': prices[ex]['futures'],
+                            'cex_price': cex_futures_price,
+                            'spread': spread,
+                            'percentage': percentage
+                        })
+                    else:
+                        opportunities.append({
+                            'type': 'cex_to_dex_futures',
+                            'dex': dex,
+                            'cex': ex,
+                            'dex_price': dex_price,
+                            'cex_price': cex_futures_price,
                             'spread': spread,
                             'percentage': percentage
                         })
@@ -273,10 +281,14 @@ async def monitor_prices(message: Message, query: str):
 
             # Get DEX prices
             try:
+                logger.info(f"Starting DEX price check for {query}")
                 chains = await exchange_service.get_currency_chains("gate", query)
+                logger.info(f"Retrieved chains for {query}: {chains}")
+                
                 if not chains:
                     logger.info(f"No chains found for {query}")
                 else:
+                    logger.info(f"Initializing DexTools with API key")
                     dex_tools = DexTools(api_key=os.getenv("DEXTOOLS_API_KEY"))
                     # Map chain names to DexTools format
                     chain_mapping = {
@@ -288,6 +300,7 @@ async def monitor_prices(message: Message, query: str):
                         'OPTIMISM': 'optimism',
                         'AVAX': 'avalanche'
                     }
+                    logger.debug(f"Chain mapping configuration: {chain_mapping}")
                     
                     # Handle chains as a list of tuples
                     for chain_name, contract_address in chains:
@@ -299,22 +312,29 @@ async def monitor_prices(message: Message, query: str):
                             # Convert chain name to DexTools format
                             dextools_chain = chain_mapping.get(chain_name.upper())
                             if dextools_chain:
-                                logger.info(f"Checking price for {query} on chain {dextools_chain} with address {contract_address}")
+                                logger.info(f"Processing chain {chain_name} ({dextools_chain}) for token {query}")
+                                logger.debug(f"Contract address for {chain_name}: {contract_address}")
+                                
+                                logger.info(f"Requesting DexTools price for {query} on {dextools_chain}")
                                 price = dex_tools.get_token_price(dextools_chain, contract_address)
+                                
                                 if price:
+                                    logger.info(f"Successfully got price for {query} on {dextools_chain}: ${price:.4f}")
                                     prices[chain_name] = {
                                         'spot': price,
                                         'futures': None,
                                         'is_dex': True  # Mark as DEX
                                     }
                                     has_any_price = True
-                                    price_message += f"DEX ({chain_name.upper()}) {query}: ${price:.4f}\n"
+                                    price_message += f"DEX ({chain_name.upper()}): ${price:.4f}\n"
+                                else:
+                                    logger.warning(f"No price returned from DexTools for {query} on {dextools_chain}")
                             else:
                                 logger.warning(f"Unsupported chain {chain_name} for DexTools")
                         except Exception as e:
-                            logger.error(f"Error getting DEX price for chain {chain_name}: {str(e)}")
+                            logger.error(f"Error getting DEX price for chain {chain_name}: {str(e)}", exc_info=True)
             except Exception as e:
-                logger.error(f"Error getting currency chains: {str(e)}")
+                logger.error(f"Error in DEX price retrieval process: {str(e)}", exc_info=True)
             
             for exchange in ["bitget", "gate", "mexc", "bybit"]:
                 prices[exchange] = {
@@ -351,19 +371,38 @@ async def monitor_prices(message: Message, query: str):
                 opportunities = await calculate_arbitrage(prices)
                 
                 # Filter opportunities > 1%
-                significant_opportunities = [opp for opp in opportunities if opp['percentage'] >= 0.3]
+                significant_opportunities = [opp for opp in opportunities if opp['percentage'] >= 0.2]
                 
                 # Create unique identifiers for current opportunities
                 current_opps = set()
                 for opp in significant_opportunities:
-                    opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
-                    if 'exchange1' in opp:
-                        opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
-                    elif 'spot_exchange' in opp:
-                        opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
-                    else:
-                        opp_id += f"_{opp['exchange']}"
-                    current_opps.add(opp_id)
+                    try:
+                        logger.debug(f"Processing opportunity: {opp}")
+                        opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
+                        
+                        # Handle different opportunity types
+                        if opp['type'] == 'dex_to_cex_spot' or opp['type'] == 'dex_to_cex_futures':
+                            opp_id += f"_{opp['dex']}_{opp['cex']}"
+                        elif opp['type'] == 'cross_exchange_spot' or opp['type'] == 'cross_exchange_futures':
+                            opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
+                        elif opp['type'] == 'cross_exchange_spot_futures':
+                            opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
+                        elif opp['type'] == 'same_exchange_spot_futures':
+                            opp_id += f"_{opp['exchange']}"
+                        else:
+                            logger.warning(f"Unknown opportunity type: {opp['type']}")
+                            continue
+                            
+                        current_opps.add(opp_id)
+                        logger.debug(f"Added opportunity ID: {opp_id}")
+                    except KeyError as ke:
+                        logger.error(f"Missing key in opportunity dict: {ke}", exc_info=True)
+                        logger.debug(f"Opportunity data: {opp}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error processing opportunity: {str(e)}", exc_info=True)
+                        logger.debug(f"Opportunity data: {opp}")
+                        continue
                 
                 # Report new opportunities
                 new_opps = current_opps - last_opportunities
@@ -396,6 +435,13 @@ async def monitor_prices(message: Message, query: str):
                                         f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
                                         f"Price difference: {opp['percentage']:.2f}%\n"
                                     )
+                            elif opp['type'] == 'cex_to_dex_spot':
+                                alert_msg += (
+                                    f"Type: CEX to DEX Spot\n"
+                                    f"Buy on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                                    f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                                    f"Price difference: {opp['percentage']:.2f}%\n"
+                                )
                             elif opp['type'] == 'dex_to_cex_futures':
                                 if opp['dex_price'] < opp['cex_price']:
                                     alert_msg += (
@@ -411,6 +457,13 @@ async def monitor_prices(message: Message, query: str):
                                         f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
                                         f"Price difference: {opp['percentage']:.2f}%\n"
                                     )
+                            elif opp['type'] == 'cex_to_dex_futures':
+                                alert_msg += (
+                                    f"Type: CEX to DEX Futures\n"
+                                    f"Buy on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                                    f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                                    f"Price difference: {opp['percentage']:.2f}%\n"
+                                )
                             elif opp['type'] == 'cross_exchange_spot':
                                 alert_msg += (
                                     f"Type: Spot-to-Spot\n"
