@@ -55,22 +55,45 @@ class GateClient:
             List of tuples (chain_name, address) where address is not empty.
         """
         logging.debug(f"Fetching currency chains for {currency}")
-        async with aiohttp.ClientSession(headers=self._get_headers()) as session:
-            url = f"{self.base_url}/spot/currencies/{currency}"
-            logging.debug(f"Making request to {url}")
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    chains = data.get('chains', [])
-                    logging.debug(f"Found {len(chains)} chains for {currency}")
-                    result = []
-                    for chain in chains:
-                        chain_name = chain.get('name')
-                        addr = chain.get('addr')
-                        if chain_name and addr:  # Only include pairs where address exists
-                            result.append((chain_name, addr))
-                            logging.debug(f"Added chain {chain_name} with address for {currency}")
-                    logging.info(f"Successfully retrieved {len(result)} valid chains for {currency}")
-                    return result
-                logging.warning(f"Failed to fetch currency chains for {currency}. Status code: {response.status}")
-                return []
+        try:
+            async with aiohttp.ClientSession(headers=self._get_headers()) as session:
+                url = f"{self.base_url}/spot/currencies/{currency}"
+                logging.debug(f"Making request to {url}")
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                            if not isinstance(data, dict):
+                                logging.error(f"Unexpected response format for {currency}: {data}")
+                                return []
+                                
+                            chains = data.get('chains', [])
+                            if not isinstance(chains, list):
+                                logging.error(f"Unexpected chains format for {currency}: {chains}")
+                                return []
+                                
+                            logging.debug(f"Found {len(chains)} chains for {currency}")
+                            result = []
+                            for chain in chains:
+                                if not isinstance(chain, dict):
+                                    logging.warning(f"Invalid chain format: {chain}")
+                                    continue
+                                    
+                                chain_name = chain.get('name')
+                                addr = chain.get('addr')
+                                if chain_name and addr and isinstance(chain_name, str) and isinstance(addr, str):
+                                    result.append((chain_name, addr))
+                                    logging.debug(f"Added chain {chain_name} with address for {currency}")
+                                else:
+                                    logging.warning(f"Invalid chain data - name: {chain_name}, addr: {addr}")
+                                    
+                            logging.info(f"Successfully retrieved {len(result)} valid chains for {currency}")
+                            return result
+                        except Exception as e:
+                            logging.error(f"Error parsing response for {currency}: {str(e)}")
+                            return []
+                    logging.warning(f"Failed to fetch currency chains for {currency}. Status code: {response.status}")
+                    return []
+        except Exception as e:
+            logging.error(f"Error in get_currency_chains for {currency}: {str(e)}")
+            return []
