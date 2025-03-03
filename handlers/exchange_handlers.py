@@ -272,18 +272,44 @@ async def monitor_prices(message: Message, query: str):
             price_message = f"📊 Current prices for {query}:\n\n"
 
             # Get DEX prices
-            chains = await exchange_service.get_currency_chains("gate", query)
-            dex_tools = DexTools(api_key=os.getenv("DEXTOOLS_API_KEY"))
-            for chain in chains:
-                price = dex_tools.get_token_price(chain[0], chain[1])
-                if price:
-                    prices[chain[0]] = {
-                        'spot': price,
-                        'futures': None,
-                        'is_dex': True  # Mark as DEX
+            try:
+                chains = await exchange_service.get_currency_chains("gate", query)
+                if not chains:
+                    logger.info(f"No chains found for {query}")
+                else:
+                    dex_tools = DexTools(api_key=os.getenv("DEXTOOLS_API_KEY"))
+                    # Map chain names to DexTools format
+                    chain_mapping = {
+                        'BASEEVM': 'base',
+                        'ETH': 'ether',
+                        'BSC': 'bsc',
+                        'MATIC': 'polygon',
+                        'ARBITRUM': 'arbitrum',
+                        'OPTIMISM': 'optimism',
+                        'AVAX': 'avalanche'
                     }
-                    has_any_price = True
-                    price_message += f"DEX ({chain[0].upper()}) {query}: ${price:.4f}\n"
+                    
+                    for chain_name, contract_address in chains:
+                        try:
+                            # Convert chain name to DexTools format
+                            dextools_chain = chain_mapping.get(chain_name.upper())
+                            if dextools_chain:
+                                logger.info(f"Checking price for {query} on chain {dextools_chain} with address {contract_address}")
+                                price = dex_tools.get_token_price(dextools_chain, contract_address)
+                                if price:
+                                    prices[chain_name] = {
+                                        'spot': price,
+                                        'futures': None,
+                                        'is_dex': True  # Mark as DEX
+                                    }
+                                    has_any_price = True
+                                    price_message += f"DEX ({chain_name.upper()}) {query}: ${price:.4f}\n"
+                            else:
+                                logger.warning(f"Unsupported chain {chain_name} for DexTools")
+                        except Exception as e:
+                            logger.error(f"Error getting DEX price for chain {chain_name}: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error getting currency chains: {str(e)}")
             
             for exchange in ["bitget", "gate", "mexc", "bybit"]:
                 prices[exchange] = {
