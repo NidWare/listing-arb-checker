@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, List, Tuple
 from exchanges.mexc.client import MexcClient
 from exchanges.gate.client import GateClient
 from exchanges.bitget.client import BitgetClient
