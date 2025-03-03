@@ -45,13 +45,8 @@ async def on_bot_status_changed(event: ChatMemberUpdated):
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    user_id = message.from_user.id
-    
-    # Check if user is admin and message is in private chat
-    if not is_admin(user_id) or message.chat.type != "private":
-        # Only respond in private chats
-        if message.chat.type == "private":
-            await message.answer("❌ Only admins can use this bot")
+    # Only respond in private chats
+    if message.chat.type != "private":
         return
         
     await message.answer(
@@ -423,261 +418,376 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
 async def monitor_prices(chat_id: int, query: str, bot):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
-        last_opportunities = set()
-        alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
-        topic_id = int(os.getenv("TOPIC_ID", "1"))
-        
-        while True:
-            prices = {}
-            has_any_price = False
-            price_message = f"📊 Current prices for {query}:\n\n"
-
-            # Get DEX prices
-            try:
-                logger.info(f"Starting DEX price check for {query}")
-                chains = await exchange_service.get_currency_chains("gate", query)
-                logger.info(f"Retrieved chains for {query}: {chains}")
-                
-                if not chains:
-                    logger.info(f"No chains found for {query}")
-                else:
-                    logger.info(f"Initializing DexTools with API key")
-                    dex_tools = DexTools(api_key=os.getenv("DEXTOOLS_API_KEY"))
-                    # Map chain names to DexTools format
-                    chain_mapping = {
-                        'BASEEVM': 'base',
-                        'ETH': 'ether',
-                        'BSC': 'bsc',
-                        'MATIC': 'polygon',
-                        'ARBITRUM': 'arbitrum',
-                        'OPTIMISM': 'optimism',
-                        'AVAX': 'avalanche'
-                    }
-                    logger.debug(f"Chain mapping configuration: {chain_mapping}")
-                    
-                    # Handle chains as a list of tuples
-                    for chain_name, contract_address in chains:
-                        if not chain_name or not contract_address:
-                            logger.warning(f"Invalid chain data: {chain_name}, {contract_address}")
-                            continue
-                            
-                        try:
-                            # Convert chain name to DexTools format
-                            dextools_chain = chain_mapping.get(chain_name.upper())
-                            if dextools_chain:
-                                logger.info(f"Processing chain {chain_name} ({dextools_chain}) for token {query}")
-                                logger.debug(f"Contract address for {chain_name}: {contract_address}")
-                                
-                                logger.info(f"Requesting DexTools price for {query} on {dextools_chain}")
-                                price = dex_tools.get_token_price(dextools_chain, contract_address)
-                                
-                                if price:
-                                    logger.info(f"Successfully got price for {query} on {dextools_chain}: ${price:.4f}")
-                                    prices[chain_name] = {
-                                        'spot': price,
-                                        'futures': None,
-                                        'is_dex': True  # Mark as DEX
-                                    }
-                                    has_any_price = True
-                                    price_message += f"DEX ({chain_name.upper()}): ${price:.4f}\n"
-                                else:
-                                    logger.warning(f"No price returned from DexTools for {query} on {dextools_chain}")
-                            else:
-                                logger.warning(f"Unsupported chain {chain_name} for DexTools")
-                        except Exception as e:
-                            logger.error(f"Error getting DEX price for chain {chain_name}: {str(e)}", exc_info=True)
-            except Exception as e:
-                logger.error(f"Error in DEX price retrieval process: {str(e)}", exc_info=True)
-            
-            for exchange in ["bitget", "gate", "mexc", "bybit"]:
-                prices[exchange] = {
-                    'spot': None,
-                    'futures': None,
-                    'is_dex': False  # Mark as CEX
-                }
-                try:
-                    spot_price = await exchange_service.get_average_price(exchange, query, market_type="spot")
-                    if spot_price:
-                        prices[exchange]['spot'] = spot_price
-                        has_any_price = True
-                        price_message += f"{exchange.upper()} Spot: ${spot_price:.4f}\n"
-                except Exception as e:
-                    logger.error(f"Error getting spot price for {exchange}: {str(e)}")
-                    price_message += f"{exchange.upper()} Spot: Not available\n"
-
-                try:
-                    futures_price = await exchange_service.get_average_price(exchange, query, market_type="futures")
-                    if futures_price:
-                        prices[exchange]['futures'] = futures_price
-                        has_any_price = True
-                        price_message += f"{exchange.upper()} Futures: ${futures_price:.4f}\n"
-                except Exception as e:
-                    logger.error(f"Error getting futures price for {exchange}: {str(e)}")
-                    price_message += f"{exchange.upper()} Futures: Not available\n"
-                
-                price_message += "\n"  # Add spacing between exchanges
-
-            # Send current prices regardless of arbitrage opportunities
-            await bot.send_message(alert_group_id, price_message, message_thread_id=topic_id)
-
-            if has_any_price:
-                opportunities = await calculate_arbitrage(prices)
-                
-                # Filter opportunities > 1%
-                significant_opportunities = [opp for opp in opportunities if opp['percentage'] >= 0.2]
-                
-                # Create unique identifiers for current opportunities
-                current_opps = set()
-                for opp in significant_opportunities:
-                    try:
-                        logger.debug(f"Processing opportunity: {opp}")
-                        opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
-                        
-                        # Handle different opportunity types
-                        if opp['type'] in ['dex_to_cex_spot', 'dex_to_cex_futures', 'cex_to_dex_spot', 'cex_to_dex_futures']:
-                            if opp['type'].startswith('dex_to_cex'):
-                                opp_id += f"_{opp['dex']}_{opp['cex']}"
-                            else:  # cex_to_dex types
-                                opp_id += f"_{opp['cex']}_{opp['dex']}"
-                        elif opp['type'] == 'cross_exchange_spot' or opp['type'] == 'cross_exchange_futures':
-                            opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
-                        elif opp['type'] == 'cross_exchange_spot_futures':
-                            opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
-                        elif opp['type'] == 'same_exchange_spot_futures':
-                            opp_id += f"_{opp['exchange']}"
-                        else:
-                            logger.warning(f"Unknown opportunity type: {opp['type']}")
-                            continue
-                            
-                        current_opps.add(opp_id)
-                        logger.debug(f"Added opportunity ID: {opp_id}")
-                    except KeyError as ke:
-                        logger.error(f"Missing key in opportunity dict: {ke}", exc_info=True)
-                        logger.debug(f"Opportunity data: {opp}")
-                        continue
-                    except Exception as e:
-                        logger.error(f"Error processing opportunity: {str(e)}", exc_info=True)
-                        logger.debug(f"Opportunity data: {opp}")
-                        continue
-                
-                # Report new opportunities
-                new_opps = current_opps - last_opportunities
-                if new_opps:
-                    # Format and send new opportunities
-                    timestamp = datetime.now().strftime("%H:%M:%S")
-                    for opp in significant_opportunities:
-                        try:
-                            opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
-                            
-                            # Generate consistent opportunity IDs
-                            if opp['type'] in ['dex_to_cex_spot', 'dex_to_cex_futures', 'cex_to_dex_spot', 'cex_to_dex_futures']:
-                                if opp['type'].startswith('dex_to_cex'):
-                                    opp_id += f"_{opp['dex']}_{opp['cex']}"
-                                else:  # cex_to_dex types
-                                    opp_id += f"_{opp['cex']}_{opp['dex']}"
-                            elif opp['type'] == 'cross_exchange_spot' or opp['type'] == 'cross_exchange_futures':
-                                opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
-                            elif opp['type'] == 'cross_exchange_spot_futures':
-                                opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
-                            elif opp['type'] == 'same_exchange_spot_futures':
-                                opp_id += f"_{opp['exchange']}"
-                            else:
-                                continue
-                            
-                            if opp_id in new_opps:
-                                try:
-                                    alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
-                                    valid_alert = True  # Flag to track if the alert is valid
-                                    
-                                    if opp['type'] == 'dex_to_cex_spot' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
-                                        alert_msg += (
-                                            f"Type: DEX to CEX Spot\n"
-                                            f"Buy on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
-                                            f"Sell on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
-                                            f"Price difference: {opp['percentage']:.2f}%\n"
-                                            f"Profit potential: ${opp['spread']:.4f}\n"
-                                        )
-                                    elif opp['type'] == 'cex_to_dex_spot' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
-                                        alert_msg += (
-                                            f"Type: CEX to DEX Spot\n"
-                                            f"Buy on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
-                                            f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
-                                            f"Price difference: {opp['percentage']:.2f}%\n"
-                                            f"Profit potential: ${opp['spread']:.4f}\n"
-                                        )
-                                    elif opp['type'] == 'dex_to_cex_futures' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
-                                        alert_msg += (
-                                            f"Type: DEX to CEX Futures\n"
-                                            f"Buy on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
-                                            f"Sell on: {opp['cex'].upper()} Futures at ${opp['cex_price']:.4f}\n"
-                                            f"Price difference: {opp['percentage']:.2f}%\n"
-                                            f"Profit potential: ${opp['spread']:.4f}\n"
-                                        )
-                                    elif opp['type'] == 'cex_to_dex_futures' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
-                                        alert_msg += (
-                                            f"Type: CEX to DEX Futures\n"
-                                            f"Buy on: {opp['cex'].upper()} Futures at ${opp['cex_price']:.4f}\n"
-                                            f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
-                                            f"Price difference: {opp['percentage']:.2f}%\n"
-                                            f"Profit potential: ${opp['spread']:.4f}\n"
-                                        )
-                                    elif opp['type'] == 'cross_exchange_spot' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
-                                        alert_msg += (
-                                            f"Type: Spot-to-Spot\n"
-                                            f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
-                                            f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
-                                            f"Price difference: {opp['percentage']:.2f}%\n"
-                                        )
-                                    elif opp['type'] == 'cross_exchange_futures' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
-                                        alert_msg += (
-                                            f"Type: Futures-to-Futures\n"
-                                            f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
-                                            f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
-                                            f"Price difference: {opp['percentage']:.2f}%\n"
-                                        )
-                                    elif opp['type'] == 'cross_exchange_spot_futures' and all(k in opp for k in ['spot_exchange', 'futures_exchange', 'spot_price', 'futures_price', 'percentage']):
-                                        alert_msg += (
-                                            f"Type: Spot-to-Futures\n"
-                                            f"Buy on: {opp['spot_exchange'].upper()} (Spot) at ${opp['spot_price']:.4f}\n"
-                                            f"Sell on: {opp['futures_exchange'].upper()} (Futures) at ${opp['futures_price']:.4f}\n"
-                                            f"Price difference: {opp['percentage']:.2f}%\n"
-                                        )
-                                    elif opp['type'] == 'same_exchange_spot_futures' and all(k in opp for k in ['exchange', 'spot_price', 'futures_price', 'percentage']):
-                                        alert_msg += (
-                                            f"Type: Same-Exchange Spot-Futures\n"
-                                            f"Exchange: {opp['exchange'].upper()}\n"
-                                            f"Spot price: ${opp['spot_price']:.4f}\n"
-                                            f"Futures price: ${opp['futures_price']:.4f}\n"
-                                            f"Price difference: {opp['percentage']:.2f}%\n"
-                                        )
-                                    else:
-                                        valid_alert = False
-                                        logger.warning(f"Invalid or incomplete opportunity data: {opp}")
-                                        
-                                    # Only send the alert if it's valid and has content
-                                    if valid_alert and len(alert_msg.strip()) > 40:  # More than just the timestamp line
-                                        await bot.send_message(alert_group_id, alert_msg, message_thread_id=topic_id)
-                                    
-                                except Exception as e:
-                                    logger.error(f"Error formatting alert message: {str(e)}", exc_info=True)
-                                    logger.debug(f"Opportunity data: {opp}")
-                                    continue
-                        except Exception as e:
-                            logger.error(f"Error processing opportunity alert: {str(e)}", exc_info=True)
-                            logger.debug(f"Opportunity data: {opp}")
-                            continue
-            
-            # Update last opportunities
-            last_opportunities = current_opps
-            
-            # Wait for 5 seconds before next check
-            await asyncio.sleep(3)
-            
+        price_monitor = ArbitragePriceMonitor(query, bot)
+        await price_monitor.start_monitoring()
     except asyncio.CancelledError:
         logger.info(f"Monitoring stopped for {query}")
     except Exception as e:
         logger.error(f"Error in price monitoring: {str(e)}")
+        alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
+        topic_id = int(os.getenv("TOPIC_ID", "1"))
         await bot.send_message(alert_group_id, f"❌ Error in price monitoring: {str(e)}", message_thread_id=topic_id)
+
+class ArbitragePriceMonitor:
+    """Class for monitoring prices and detecting arbitrage opportunities"""
+    
+    def __init__(self, query: str, bot):
+        self.query = query
+        self.bot = bot
+        self.last_opportunities = set()
+        self.alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
+        self.topic_id = int(os.getenv("TOPIC_ID", "1"))
+        self.cex_exchanges = ["bitget", "gate", "mexc", "bybit"]
+        self.chain_mapping = {
+            'BASEEVM': 'base',
+            'ETH': 'ether',
+            'BSC': 'bsc',
+            'MATIC': 'polygon',
+            'ARBITRUM': 'arbitrum',
+            'OPTIMISM': 'optimism',
+            'AVAX': 'avalanche'
+        }
+    
+    async def start_monitoring(self):
+        """Start the monitoring loop"""
+        while True:
+            prices = {}
+            has_any_price = False
+            
+            # Collect prices from DEX and CEX
+            dex_prices = await self._fetch_dex_prices()
+            prices.update(dex_prices)
+            
+            cex_prices = await self._fetch_cex_prices()
+            prices.update(cex_prices)
+            
+            # Determine if we have any prices
+            has_any_price = any(
+                prices[exchange].get('spot') is not None or prices[exchange].get('futures') is not None
+                for exchange in prices
+            )
+            
+            # Format and send price message
+            price_message = self._format_price_message(prices)
+            await self._send_message(price_message)
+            
+            # Process arbitrage opportunities if we have prices
+            if has_any_price:
+                await self._process_arbitrage_opportunities(prices)
+            
+            # Wait before next check
+            await asyncio.sleep(3)
+    
+    async def _fetch_dex_prices(self) -> Dict[str, Dict[str, Any]]:
+        """Fetch prices from DEX platforms"""
+        dex_prices = {}
+        try:
+            logger.info(f"Starting DEX price check for {self.query}")
+            chains = await exchange_service.get_currency_chains("gate", self.query)
+            logger.info(f"Retrieved chains for {self.query}: {chains}")
+            
+            if not chains:
+                logger.info(f"No chains found for {self.query}")
+                return dex_prices
+                
+            # Initialize DexTools API
+            dex_tools = DexTools(api_key=os.getenv("DEXTOOLS_API_KEY"))
+            logger.info(f"Initialized DexTools with API key")
+            
+            # Process each chain
+            for chain_name, contract_address in chains:
+                if not chain_name or not contract_address:
+                    logger.warning(f"Invalid chain data: {chain_name}, {contract_address}")
+                    continue
+                
+                dex_price = await self._get_dex_price(dex_tools, chain_name, contract_address)
+                if dex_price:
+                    dex_prices[chain_name] = {
+                        'spot': dex_price,
+                        'futures': None,
+                        'is_dex': True
+                    }
+        except Exception as e:
+            logger.error(f"Error in DEX price retrieval process: {str(e)}", exc_info=True)
+        
+        return dex_prices
+    
+    async def _get_dex_price(self, dex_tools, chain_name: str, contract_address: str) -> Optional[float]:
+        """Get price for a specific DEX chain"""
+        try:
+            # Convert chain name to DexTools format
+            dextools_chain = self.chain_mapping.get(chain_name.upper())
+            if not dextools_chain:
+                logger.warning(f"Unsupported chain {chain_name} for DexTools")
+                return None
+                
+            logger.info(f"Processing chain {chain_name} ({dextools_chain}) for token {self.query}")
+            logger.debug(f"Contract address for {chain_name}: {contract_address}")
+            
+            logger.info(f"Requesting DexTools price for {self.query} on {dextools_chain}")
+            price = dex_tools.get_token_price(dextools_chain, contract_address)
+            
+            if price:
+                logger.info(f"Successfully got price for {self.query} on {dextools_chain}: ${price:.4f}")
+                return price
+            else:
+                logger.warning(f"No price returned from DexTools for {self.query} on {dextools_chain}")
+                return None
+        except Exception as e:
+            logger.error(f"Error getting DEX price for chain {chain_name}: {str(e)}", exc_info=True)
+            return None
+    
+    async def _fetch_cex_prices(self) -> Dict[str, Dict[str, Any]]:
+        """Fetch prices from centralized exchanges"""
+        cex_prices = {}
+        
+        for exchange in self.cex_exchanges:
+            cex_prices[exchange] = {
+                'spot': None,
+                'futures': None,
+                'is_dex': False
+            }
+            
+            # Get spot price
+            try:
+                spot_price = await exchange_service.get_average_price(
+                    exchange, self.query, market_type="spot"
+                )
+                if spot_price:
+                    cex_prices[exchange]['spot'] = spot_price
+            except Exception as e:
+                logger.error(f"Error getting spot price for {exchange}: {str(e)}")
+            
+            # Get futures price
+            try:
+                futures_price = await exchange_service.get_average_price(
+                    exchange, self.query, market_type="futures"
+                )
+                if futures_price:
+                    cex_prices[exchange]['futures'] = futures_price
+            except Exception as e:
+                logger.error(f"Error getting futures price for {exchange}: {str(e)}")
+        
+        return cex_prices
+    
+    def _format_price_message(self, prices: Dict[str, Dict[str, Any]]) -> str:
+        """Format the price message to display to users"""
+        price_message = f"📊 Current prices for {self.query}:\n\n"
+        
+        # Add DEX prices
+        for exchange, price_data in prices.items():
+            if price_data.get('is_dex', False) and price_data.get('spot'):
+                price_message += f"DEX ({exchange.upper()}): ${price_data['spot']:.4f}\n"
+        
+        # Add CEX prices
+        for exchange in self.cex_exchanges:
+            if exchange in prices:
+                if prices[exchange].get('spot'):
+                    price_message += f"{exchange.upper()} Spot: ${prices[exchange]['spot']:.4f}\n"
+                else:
+                    price_message += f"{exchange.upper()} Spot: Not available\n"
+                
+                if prices[exchange].get('futures'):
+                    price_message += f"{exchange.upper()} Futures: ${prices[exchange]['futures']:.4f}\n"
+                else:
+                    price_message += f"{exchange.upper()} Futures: Not available\n"
+                
+                price_message += "\n"  # Add spacing between exchanges
+        
+        return price_message
+    
+    async def _process_arbitrage_opportunities(self, prices: Dict[str, Dict[str, Any]]):
+        """Process and alert about arbitrage opportunities"""
+        # Calculate arbitrage opportunities
+        opportunities = await calculate_arbitrage(prices)
+        
+        # Filter significant opportunities (>= 0.2%) and exclude same-exchange opportunities
+        significant_opportunities = [
+            opp for opp in opportunities
+            if opp['percentage'] >= 0.2 and opp['type'] != 'same_exchange_spot_futures'
+        ]
+        
+        # Generate unique IDs for each opportunity
+        current_opps = self._generate_opportunity_ids(significant_opportunities)
+        
+        # Report new opportunities
+        new_opps = current_opps - self.last_opportunities
+        if new_opps:
+            await self._send_new_opportunity_alerts(significant_opportunities, new_opps)
+        
+        # Update last opportunities
+        self.last_opportunities = current_opps
+    
+    def _generate_opportunity_ids(self, opportunities: List[Dict]) -> Set[str]:
+        """Generate unique IDs for arbitrage opportunities"""
+        current_opps = set()
+        
+        for opp in opportunities:
+            try:
+                # Skip same-exchange opportunities
+                if opp['type'] == 'same_exchange_spot_futures':
+                    continue
+                    
+                opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
+                
+                # Add exchange-specific information to the ID based on opportunity type
+                if opp['type'] in ['dex_to_cex_spot', 'dex_to_cex_futures']:
+                    opp_id += f"_{opp['dex']}_{opp['cex']}"
+                elif opp['type'] in ['cex_to_dex_spot', 'cex_to_dex_futures']:
+                    opp_id += f"_{opp['cex']}_{opp['dex']}"
+                elif opp['type'] in ['cross_exchange_spot', 'cross_exchange_futures']:
+                    opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
+                elif opp['type'] == 'cross_exchange_spot_futures':
+                    opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
+                else:
+                    logger.warning(f"Unknown opportunity type: {opp['type']}")
+                    continue
+                    
+                current_opps.add(opp_id)
+                logger.debug(f"Added opportunity ID: {opp_id}")
+                
+            except KeyError as ke:
+                logger.error(f"Missing key in opportunity dict: {ke}", exc_info=True)
+                logger.debug(f"Opportunity data: {opp}")
+            except Exception as e:
+                logger.error(f"Error processing opportunity: {str(e)}", exc_info=True)
+                logger.debug(f"Opportunity data: {opp}")
+                
+        return current_opps
+    
+    async def _send_new_opportunity_alerts(self, opportunities: List[Dict], new_opps: Set[str]):
+        """Send alerts for new arbitrage opportunities"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        for opp in opportunities:
+            try:
+                # Generate the opportunity ID in the same way as in _generate_opportunity_ids
+                opp_id = self._get_opportunity_id(opp)
+                
+                # Check if this opportunity is new
+                if opp_id in new_opps:
+                    alert_msg = self._format_opportunity_alert(opp, timestamp)
+                    if alert_msg:
+                        await self._send_message(alert_msg)
+                        
+            except Exception as e:
+                logger.error(f"Error processing opportunity alert: {str(e)}", exc_info=True)
+                logger.debug(f"Opportunity data: {opp}")
+    
+    def _get_opportunity_id(self, opp: Dict) -> str:
+        """Get a unique ID for an opportunity - must match the logic in _generate_opportunity_ids"""
+        # Skip same-exchange opportunities
+        if opp['type'] == 'same_exchange_spot_futures':
+            return ""
+            
+        opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
+        
+        if opp['type'] in ['dex_to_cex_spot', 'dex_to_cex_futures']:
+            opp_id += f"_{opp['dex']}_{opp['cex']}"
+        elif opp['type'] in ['cex_to_dex_spot', 'cex_to_dex_futures']:
+            opp_id += f"_{opp['cex']}_{opp['dex']}"
+        elif opp['type'] in ['cross_exchange_spot', 'cross_exchange_futures']:
+            opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
+        elif opp['type'] == 'cross_exchange_spot_futures':
+            opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
+            
+        return opp_id
+    
+    def _format_opportunity_alert(self, opp: Dict, timestamp: str) -> Optional[str]:
+        """Format an alert message for a new arbitrage opportunity"""
+        try:
+            # Skip same-exchange opportunities
+            if opp['type'] == 'same_exchange_spot_futures':
+                logger.info(f"Skipping same-exchange opportunity for {opp['exchange']}")
+                return None
+                
+            alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
+            
+            # DEX to CEX Spot
+            if opp['type'] == 'dex_to_cex_spot' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+                alert_msg += (
+                    f"Type: DEX to CEX Spot\n"
+                    f"Buy on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                    f"Sell on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                    f"Price difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${opp['spread']:.4f}\n"
+                )
+            
+            # CEX to DEX Spot
+            elif opp['type'] == 'cex_to_dex_spot' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+                alert_msg += (
+                    f"Type: CEX to DEX Spot\n"
+                    f"Buy on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                    f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                    f"Price difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${opp['spread']:.4f}\n"
+                )
+            
+            # DEX to CEX Futures
+            elif opp['type'] == 'dex_to_cex_futures' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+                alert_msg += (
+                    f"Type: DEX to CEX Futures\n"
+                    f"Buy on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                    f"Sell on: {opp['cex'].upper()} Futures at ${opp['cex_price']:.4f}\n"
+                    f"Price difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${opp['spread']:.4f}\n"
+                )
+            
+            # CEX to DEX Futures
+            elif opp['type'] == 'cex_to_dex_futures' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+                alert_msg += (
+                    f"Type: CEX to DEX Futures\n"
+                    f"Buy on: {opp['cex'].upper()} Futures at ${opp['cex_price']:.4f}\n"
+                    f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                    f"Price difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${opp['spread']:.4f}\n"
+                )
+            
+            # CEX to CEX Spot
+            elif opp['type'] == 'cross_exchange_spot' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
+                alert_msg += (
+                    f"Type: Spot-to-Spot\n"
+                    f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
+                    f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
+                    f"Price difference: {opp['percentage']:.2f}%\n"
+                )
+            
+            # CEX to CEX Futures
+            elif opp['type'] == 'cross_exchange_futures' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
+                alert_msg += (
+                    f"Type: Futures-to-Futures\n"
+                    f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
+                    f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
+                    f"Price difference: {opp['percentage']:.2f}%\n"
+                )
+            
+            # CEX Spot to CEX Futures (Cross-exchange)
+            elif opp['type'] == 'cross_exchange_spot_futures' and all(k in opp for k in ['spot_exchange', 'futures_exchange', 'spot_price', 'futures_price', 'percentage']):
+                alert_msg += (
+                    f"Type: Spot-to-Futures\n"
+                    f"Buy on: {opp['spot_exchange'].upper()} (Spot) at ${opp['spot_price']:.4f}\n"
+                    f"Sell on: {opp['futures_exchange'].upper()} (Futures) at ${opp['futures_price']:.4f}\n"
+                    f"Price difference: {opp['percentage']:.2f}%\n"
+                )
+            else:
+                logger.warning(f"Invalid or incomplete opportunity data: {opp}")
+                return None
+                
+            return alert_msg
+                
+        except Exception as e:
+            logger.error(f"Error formatting alert message: {str(e)}", exc_info=True)
+            logger.debug(f"Opportunity data: {opp}")
+            return None
+    
+    async def _send_message(self, message: str):
+        """Send a message to the alert group"""
+        if message and len(message.strip()) > 0:
+            await self.bot.send_message(
+                self.alert_group_id, 
+                message, 
+                message_thread_id=self.topic_id
+            )
 
 @router.message(Command("stop"))
 async def cmd_stop(message: Message):
