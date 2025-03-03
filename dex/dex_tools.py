@@ -21,7 +21,7 @@ class DexTools:
         """
         url = f"{self.basic_url}token/{chain}/{address}/price"
         response = self._send_get(url)
-        logging.info(f"Token price response: {response}")
+        logging.info(f"chain: {chain} address: {address} Token price response: {response}")
         if response and 'data' in response and 'price' in response['data']:
             return response['data']['price']
         return None
