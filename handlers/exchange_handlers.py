@@ -289,7 +289,12 @@ async def monitor_prices(message: Message, query: str):
                         'AVAX': 'avalanche'
                     }
                     
+                    # Handle chains as a list of tuples
                     for chain_name, contract_address in chains:
+                        if not chain_name or not contract_address:
+                            logger.warning(f"Invalid chain data: {chain_name}, {contract_address}")
+                            continue
+                            
                         try:
                             # Convert chain name to DexTools format
                             dextools_chain = chain_mapping.get(chain_name.upper())
