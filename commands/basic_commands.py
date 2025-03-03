@@ -50,7 +50,9 @@ async def cmd_stats(message: Message):
     else:
         await message.answer("⚠️ You don't have permission to use this command.")
 
-@basic_router.message()
+# We need to make sure this catch-all handler doesn't interfere with other command handlers
+# To do that, we'll check if the message starts with a command prefix and ignore it
+@basic_router.message(lambda message: not message.text.startswith('/'))
 async def debug_chat_info(message: Message):
     """Debug handler to log chat information"""
     # Skip if waiting for min percentage input (will be handled by monitor_commands)

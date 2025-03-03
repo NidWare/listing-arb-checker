@@ -11,8 +11,8 @@ from commands.bot_instance import get_bot_instance
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Create router
-monitor_router = Router()
+# Create router with name to help with debugging
+monitor_router = Router(name="monitor_commands")
 
 # Store active monitoring tasks
 active_monitors = {}
@@ -22,6 +22,7 @@ user_queries = {}
 
 @monitor_router.message(Command("monitor"))
 async def cmd_monitor(message: Message):
+    logger.info(f"Received /monitor command from user {message.from_user.id}")
     if message.from_user.id not in ConfigManager.get_admin_user_ids():
         await message.answer("⚠️ You don't have permission to use this command.")
         return
@@ -39,6 +40,7 @@ async def cmd_monitor(message: Message):
     
     # Store the query information to start monitoring after getting the percentage
     user_queries[message.from_user.id] = coin
+    logger.info(f"Added user {message.from_user.id} to user_queries with coin {coin}")
     
 @monitor_router.message(Command("cancel"))
 async def cmd_cancel(message: Message):
@@ -52,8 +54,10 @@ async def cmd_cancel(message: Message):
     else:
         await message.answer("No monitoring setup in progress to cancel.")
 
-@monitor_router.message(lambda message: message.from_user.id in user_queries)
+# This filter needs to run before the catch-all handler in basic_commands
+@monitor_router.message(lambda message: message.from_user.id in user_queries and not message.text.startswith('/'))
 async def handle_min_percentage(message: Message):
+    logger.info(f"Processing input from user {message.from_user.id} who is in user_queries")
     user_id = message.from_user.id
     
     if user_id not in ConfigManager.get_admin_user_ids():

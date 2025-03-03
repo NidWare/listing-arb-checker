@@ -28,9 +28,9 @@ admin_dp = Dispatcher()
 # Register message logging middleware
 admin_dp.message.middleware(MessageLoggingMiddleware())
 
-# Register routers
-admin_dp.include_router(basic_router)
+# Register routers - important to register monitor_router first to give it priority
 admin_dp.include_router(monitor_router)
+admin_dp.include_router(basic_router)
 
 async def start_admin_bot():
     """Start the admin bot in polling mode"""
