@@ -6,6 +6,8 @@ import logging
 from typing import Dict, Optional, Tuple, List
 import asyncio
 from datetime import datetime
+from ..dex.dex_tools import DexTools
+import os
 
 router = Router()
 exchange_service = ExchangeService()
@@ -63,28 +65,70 @@ def format_price_comparison(prices: Dict[str, Dict[str, Optional[float]]], symbo
     return "\n".join(result)
 
 async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> List[Dict]:
-    """Calculate all possible arbitrage opportunities between exchanges"""
+    """Calculate all possible arbitrage opportunities between exchanges and DEX"""
     opportunities = []
-    exchanges = list(prices.keys())
+    exchanges = [ex for ex in prices.keys() if not prices[ex].get('is_dex', False)]
+    dex_chains = [ex for ex in prices.keys() if prices[ex].get('is_dex', False)]
     
     # Helper function to calculate percentage difference
     def calc_percentage(price1: float, price2: float) -> float:
         return (price2 - price1) / price1 * 100
     
-    # Compare all possible combinations
+    # Compare DEX to CEX opportunities
+    for dex in dex_chains:
+        dex_price = prices[dex]['spot']  # DEX only has spot price
+        if not dex_price:
+            continue
+            
+        for ex in exchanges:
+            # DEX to CEX Spot
+            if prices[ex]['spot']:
+                if dex_price < prices[ex]['spot']:
+                    spread = prices[ex]['spot'] - dex_price
+                    percentage = calc_percentage(dex_price, prices[ex]['spot'])
+                    
+                    if percentage >= 0.1:
+                        opportunities.append({
+                            'type': 'dex_to_cex_spot',
+                            'dex': dex,
+                            'cex': ex,
+                            'dex_price': dex_price,
+                            'cex_price': prices[ex]['spot'],
+                            'spread': spread,
+                            'percentage': percentage
+                        })
+            
+            # DEX to CEX Futures
+            if prices[ex]['futures']:
+                if dex_price < prices[ex]['futures']:
+                    spread = prices[ex]['futures'] - dex_price
+                    percentage = calc_percentage(dex_price, prices[ex]['futures'])
+                    
+                    if percentage >= 0.1:
+                        opportunities.append({
+                            'type': 'dex_to_cex_futures',
+                            'dex': dex,
+                            'cex': ex,
+                            'dex_price': dex_price,
+                            'cex_price': prices[ex]['futures'],
+                            'spread': spread,
+                            'percentage': percentage
+                        })
+    
+    # Compare all CEX combinations
     for i in range(len(exchanges)):
         for j in range(len(exchanges)):
-            if i != j:  # Compare different exchanges
+            if i != j:
                 ex1, ex2 = exchanges[i], exchanges[j]
                 
                 # SPOT to SPOT between exchanges
                 if prices[ex1]['spot'] and prices[ex2]['spot']:
                     buy_price, sell_price = prices[ex1]['spot'], prices[ex2]['spot']
-                    if buy_price < sell_price:  # Only if we can buy low and sell high
+                    if buy_price < sell_price:
                         spread = sell_price - buy_price
                         percentage = calc_percentage(buy_price, sell_price)
                         
-                        if percentage >= 0.1:  # Lower threshold to show more opportunities
+                        if percentage >= 0.1:
                             opportunities.append({
                                 'type': 'cross_exchange_spot',
                                 'exchange1': ex1,
@@ -98,7 +142,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                 # FUTURES to FUTURES between exchanges
                 if prices[ex1]['futures'] and prices[ex2]['futures']:
                     buy_price, sell_price = prices[ex1]['futures'], prices[ex2]['futures']
-                    if buy_price < sell_price:  # Only if we can buy low and sell high
+                    if buy_price < sell_price:
                         spread = sell_price - buy_price
                         percentage = calc_percentage(buy_price, sell_price)
                         
@@ -116,7 +160,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
                 # SPOT to FUTURES between different exchanges
                 if prices[ex1]['spot'] and prices[ex2]['futures']:
                     buy_price, sell_price = prices[ex1]['spot'], prices[ex2]['futures']
-                    if buy_price < sell_price:  # Only if we can buy low and sell high
+                    if buy_price < sell_price:
                         spread = sell_price - buy_price
                         percentage = calc_percentage(buy_price, sell_price)
                         
@@ -135,7 +179,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]]) -> 
     for ex in exchanges:
         if prices[ex]['spot'] and prices[ex]['futures']:
             spot, futures = prices[ex]['spot'], prices[ex]['futures']
-            if spot < futures:  # Only if spot price is lower than futures
+            if spot < futures:
                 spread = futures - spot
                 percentage = calc_percentage(spot, futures)
                 
@@ -162,8 +206,25 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
     result.append("───────────────────────────────────────────")
     
     for opp in opportunities:
-        if opp['type'] == 'cross_exchange_spot':
-            profit = opp['spread'] * 100  # Example calculation, adjust as needed
+        profit = opp['spread'] * 100  # Example calculation, adjust as needed
+        
+        if opp['type'] == 'dex_to_cex_spot':
+            dex = f"{opp['dex'].upper():6}"
+            cex = f"{opp['cex'].upper():6}"
+            route = f"{dex}→ {cex}"
+            result.append(
+                f"DEX→S    {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+            )
+        
+        elif opp['type'] == 'dex_to_cex_futures':
+            dex = f"{opp['dex'].upper():6}"
+            cex = f"{opp['cex'].upper():6}"
+            route = f"{dex}→ {cex}"
+            result.append(
+                f"DEX→F    {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+            )
+        
+        elif opp['type'] == 'cross_exchange_spot':
             ex1 = f"{opp['exchange1'].upper():6}"
             ex2 = f"{opp['exchange2'].upper():6}"
             route = f"{ex1}→ {ex2}"
@@ -172,7 +233,6 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             )
         
         elif opp['type'] == 'cross_exchange_futures':
-            profit = opp['spread'] * 100  # Example calculation, adjust as needed
             ex1 = f"{opp['exchange1'].upper():6}"
             ex2 = f"{opp['exchange2'].upper():6}"
             route = f"{ex1}→ {ex2}"
@@ -181,21 +241,18 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             )
         
         elif opp['type'] == 'cross_exchange_spot_futures':
-            profit = opp['spread'] * 100  # Example calculation, adjust as needed
             ex1 = f"{opp['spot_exchange'].upper():6}"
             ex2 = f"{opp['futures_exchange'].upper():6}"
             route = f"{ex1}→ {ex2}"
-            # Determine if it's spot→futures or futures→spot based on prices
             if opp['spot_price'] < opp['futures_price']:
-                cross_type = "S→F"  # spot to futures
+                cross_type = "S→F"
             else:
-                cross_type = "F→S"  # futures to spot
+                cross_type = "F→S"
             result.append(
                 f"CROSS {cross_type} {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
             )
         
         else:  # same_exchange_spot_futures
-            profit = opp['spread'] * 100  # Example calculation, adjust as needed
             route = f"{opp['exchange'].upper():15}"
             result.append(
                 f"S/F       {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
@@ -207,16 +264,33 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
 async def monitor_prices(message: Message, query: str):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
-        last_opportunities = set()  # Store hash of last reported opportunities
+        last_opportunities = set()
         
         while True:
             prices = {}
-            has_any_price = False  # Flag to track if we got any price
+            has_any_price = False
             price_message = f"📊 Current prices for {query}:\n\n"
+
+            # Get DEX prices
+            chains = await exchange_service.get_currency_chains("gate", query)
+            dex_tools = DexTools(api_key=os.getenv("DEXTOOLS_API_KEY"))
+            for chain in chains:
+                price = dex_tools.get_token_price(chain[0], chain[1])
+                if price:
+                    prices[chain[0]] = {
+                        'spot': price,
+                        'futures': None,
+                        'is_dex': True  # Mark as DEX
+                    }
+                    has_any_price = True
+                    price_message += f"DEX ({chain[0].upper()}) {query}: ${price:.4f}\n"
             
-            # Collect prices from all exchanges
-            for exchange in ["bitget", "gate", "mexc", "bybit"]: # TODO: CHANGE THIS TO THE EXCHANGES YOU WANT TO MONITOR
-                prices[exchange] = {'spot': None, 'futures': None}
+            for exchange in ["bitget", "gate", "mexc", "bybit"]:
+                prices[exchange] = {
+                    'spot': None,
+                    'futures': None,
+                    'is_dex': False  # Mark as CEX
+                }
                 try:
                     spot_price = await exchange_service.get_average_price(exchange, query, market_type="spot")
                     if spot_price:
@@ -243,7 +317,6 @@ async def monitor_prices(message: Message, query: str):
             await message.answer(price_message)
 
             if has_any_price:
-                # Calculate arbitrage opportunities only if we have some prices
                 opportunities = await calculate_arbitrage(prices)
                 
                 # Filter opportunities > 1%
@@ -277,7 +350,37 @@ async def monitor_prices(message: Message, query: str):
                         
                         if opp_id in new_opps:
                             alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
-                            if opp['type'] == 'cross_exchange_spot':
+                            if opp['type'] == 'dex_to_cex_spot':
+                                if opp['dex_price'] < opp['cex_price']:
+                                    alert_msg += (
+                                        f"Type: DEX to CEX Spot\n"
+                                        f"Buy on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                                        f"Sell on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                                        f"Price difference: {opp['percentage']:.2f}%\n"
+                                    )
+                                else:
+                                    alert_msg += (
+                                        f"Type: CEX to DEX Spot\n"
+                                        f"Buy on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                                        f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                                        f"Price difference: {opp['percentage']:.2f}%\n"
+                                    )
+                            elif opp['type'] == 'dex_to_cex_futures':
+                                if opp['dex_price'] < opp['cex_price']:
+                                    alert_msg += (
+                                        f"Type: DEX to CEX Futures\n"
+                                        f"Buy on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                                        f"Sell on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                                        f"Price difference: {opp['percentage']:.2f}%\n"
+                                    )
+                                else:
+                                    alert_msg += (
+                                        f"Type: CEX to DEX Futures\n"
+                                        f"Buy on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                                        f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                                        f"Price difference: {opp['percentage']:.2f}%\n"
+                                    )
+                            elif opp['type'] == 'cross_exchange_spot':
                                 alert_msg += (
                                     f"Type: Spot-to-Spot\n"
                                     f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
@@ -293,12 +396,15 @@ async def monitor_prices(message: Message, query: str):
                                 )
                             elif opp['type'] == 'cross_exchange_spot_futures':
                                 alert_msg += (
+                                    f"Type: Spot-to-Futures\n"
                                     f"Spot exchange: {opp['spot_exchange'].upper()} at ${opp['spot_price']:.4f}\n"
                                     f"Futures exchange: {opp['futures_exchange'].upper()} at ${opp['futures_price']:.4f}\n"
                                     f"Price difference: {opp['percentage']:.2f}%\n"
                                 )
                             
-                            await message.answer(alert_msg)
+                            # Only send alert if it's not a same-exchange opportunity
+                            if opp['type'] != 'same_exchange_spot_futures':
+                                await message.answer(alert_msg)
             
             # Update last opportunities
             last_opportunities = current_opps
