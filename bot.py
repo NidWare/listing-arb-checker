@@ -64,10 +64,13 @@ async def start_main_bot():
 
 async def main():
     try:
-        # Run only the admin bot
-        await start_admin_bot()
+        # Run both bots
+        await asyncio.gather(
+            start_main_bot(),
+            start_admin_bot()
+        )
     except Exception as e:
-        logger.error(f"Error running admin bot: {str(e)}", exc_info=True)
+        logger.error(f"Error running bots: {str(e)}", exc_info=True)
         raise
 
 if __name__ == "__main__":

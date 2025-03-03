@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.filters import Command, ChatMemberUpdatedFilter
 from aiogram.types import Message, ChatMemberUpdated, CallbackQuery, InlineKeyboardMarkup
 from aiogram.enums.chat_member_status import ChatMemberStatus
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from services.exchange_service import ExchangeService
 import logging
 from typing import Dict, Optional, Any, List, Set
@@ -29,10 +30,12 @@ exchange_service = ExchangeService()
 logger = logging.getLogger(__name__)
 
 # Store admin IDs
-ADMIN_IDS: Set[int] = {741239404, 180247888}
+ADMIN_IDS_ENV = os.getenv("ADMIN_USER_IDS", "741239404,180247888")
+ADMIN_IDS: Set[int] = {int(id.strip()) for id in ADMIN_IDS_ENV.split(",")}
 
 def is_admin(user_id: int) -> bool:
     """Check if user is an admin"""
+    logger.info(f"Checking if user {user_id} is admin. Admin IDs: {ADMIN_IDS}")
     return user_id in ADMIN_IDS
 
 @router.my_chat_member()
@@ -842,10 +845,13 @@ async def handle_search(message: Message):
     topic_id = int(os.getenv("TOPIC_ID", "1"))
     bot = message.bot
     
+    logger.info(f"Received message from user ID: {user_id}, chat type: {message.chat.type}")
+    
     # Check if user is admin and message is in private chat
     if not is_admin(user_id) or message.chat.type != "private":
         # Only respond in private chats
         if message.chat.type == "private":
+            logger.info(f"User {user_id} is not an admin, rejecting command")
             await message.answer("❌ Only admins can specify coins to monitor")
         return
     
@@ -859,6 +865,7 @@ async def handle_search(message: Message):
     user_queries[chat_id] = query
     
     # Ask for filter mode first
+    logger.info(f"Showing filter keyboard to user {user_id}")
     await message.answer(
         "Please select which opportunities to monitor:",
         reply_markup=get_filter_mode_keyboard()
@@ -925,8 +932,6 @@ async def handle_min_percentage(message: Message):
 
 def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
     """Create a keyboard for selecting filter mode"""
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    
     builder = InlineKeyboardBuilder()
     
     builder.button(
@@ -948,8 +953,11 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id
     
+    logger.info(f"Received filter callback from user {user_id}: {callback.data}")
+    
     # Check if user is admin
     if not is_admin(user_id):
+        logger.warning(f"Non-admin user {user_id} attempted to change filter settings")
         await callback.answer("Only admins can change filter settings", show_alert=True)
         return
     
@@ -958,6 +966,7 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     
     # Store the user's preference
     user_filter_preferences[chat_id] = filter_mode
+    logger.info(f"Set filter mode for user {user_id} to {filter_mode}")
     
     # Get the stored query or ask for a new one
     query = user_queries.get(chat_id)
@@ -967,10 +976,13 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     else:
         mode_text = "CEX-CEX + DEX"
     
+    # Always answer the callback to prevent the "loading" state in Telegram
     await callback.answer(f"Filter set to: {mode_text}")
     
     # If we have a pending query, ask for percentage
     if query:
+        logger.info(f"User {user_id} has pending query {query}, asking for percentage")
         await callback.message.answer(f"Filter set to: {mode_text}\n\nPlease enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
     else:
+        logger.info(f"User {user_id} has no pending query, asking for coin name")
         await callback.message.answer(f"Filter set to: {mode_text}\n\nPlease send a coin name to start monitoring.") 
