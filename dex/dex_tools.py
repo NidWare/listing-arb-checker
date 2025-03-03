@@ -6,6 +6,7 @@ class DexTools:
 
     def __init__(self, api_key):
         self.api_key = api_key
+        logging.info(f"DexTools initialized with API key: {api_key[:5]}...")  # Log only first 5 chars for security
 
     def get_price(self, contract):
         url = f"{self.basic_url}price/{contract}"
@@ -30,18 +31,30 @@ class DexTools:
         return self._send_get(url)
 
     def _get_headers(self):
-        return {'x-api-key': self.api_key, 'accept':'application/json'}
+        headers = {'x-api-key': self.api_key, 'accept': 'application/json'}
+        logging.info(f"Generated headers: {headers}")  # Log headers (API key will be visible)
+        return headers
 
     def _send_request(self, method, url, params=None, data=None):
         headers = self._get_headers()
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            params=params if method == 'GET' else None,
-            json=data if method in ['POST', 'PUT'] else None
-        )
-        return response.json()
+        logging.info(f"Making request to URL: {url}")
+        logging.info(f"Request method: {method}")
+        logging.info(f"Request params: {params}")
+        
+        try:
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=params if method == 'GET' else None,
+                json=data if method in ['POST', 'PUT'] else None
+            )
+            logging.info(f"Response status code: {response.status_code}")
+            logging.info(f"Response headers: {response.headers}")
+            return response.json()
+        except Exception as e:
+            logging.error(f"Request failed: {str(e)}")
+            return {'message': str(e)}
 
     def _send_get(self, url, params=None):
         return self._send_request('GET', url, params=params)
