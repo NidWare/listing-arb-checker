@@ -2,7 +2,7 @@ import requests
 import logging
 class DexTools:
 
-    basic_url = "https://public-api.dextools.io/standard/v2/"
+    basic_url = "https://public-api.dextools.io/trial/v2/"
 
     def __init__(self, api_key):
         self.api_key = api_key
@@ -30,7 +30,7 @@ class DexTools:
         return self._send_get(url)
 
     def _get_headers(self):
-        return {'api-key': self.api_key, 'accept':'application/json'}
+        return {'x-api-key': self.api_key, 'accept':'application/json'}
 
     def _send_request(self, method, url, params=None, data=None):
         headers = self._get_headers()
