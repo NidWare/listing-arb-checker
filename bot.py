@@ -66,7 +66,6 @@ async def main():
     try:
         # Run both bots
         await asyncio.gather(
-            start_main_bot(),
             start_admin_bot()
         )
     except Exception as e:

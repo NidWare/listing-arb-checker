@@ -26,6 +26,20 @@ class DexTools:
             return response['data']['price']
         return None
 
+    def get_pool_price(self, chain, pool_address):
+        """
+        Get pool price for a specific pool on a chain
+        :param chain: Chain name (e.g., 'ether', 'bsc')
+        :param pool_address: Pool address
+        :return: Pool price as float or None if not available
+        """
+        url = f"{self.basic_url}pool/{chain}/{pool_address}/price"
+        response = self._send_get(url)
+        logging.info(f"chain: {chain} pool_address: {pool_address} Pool price response: {response}")
+        if response and 'data' in response and 'price' in response['data']:
+            return response['data']['price']
+        return None
+
     def get_token_info(self, chain, address):
         url = f"{self.basic_url}token/{chain}/{address}"
         return self._send_get(url)

@@ -163,17 +163,18 @@ class MexcClient(BaseAPIClient):
             float: Current price of the symbol
         """
         symbol = f"{symbol}USDT"
-        url = f"{self.base_url}/avgPrice"
+        url = f"{self.BASE_URL}/ticker/24hr"
         params = {"symbol": symbol}
         
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=self.get_headers()) as response:
-                    if response.status != 200:
-                        logger.error(f"MEXC API error: {await response.text()}")
-                        return None
-                    data = await response.json()
-                    return float(data["price"])
+            await self.ensure_session()
+            async with self.session.get(url, params=params, headers=self.get_headers()) as response:
+                if response.status != 200:
+                    logger.error(f"MEXC API error: {await response.text()}")
+                    return None
+                data = await response.json()
+                logger.info(f"MEXC spot price for {symbol}: {data}")
+                return float(data["lastPrice"])
         except Exception as e:
             logger.error(f"Error fetching spot price for {symbol}: {str(e)}")
             return None

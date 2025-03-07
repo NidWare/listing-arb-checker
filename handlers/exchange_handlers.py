@@ -131,7 +131,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
         return ((sell_price - buy_price) / buy_price) * 100
     
     # Compare DEX to CEX opportunities (only if not in CEX-only mode)
-    if filter_mode == "all":
+    if filter_mode == "all" or filter_mode == "cex_dex_only" or filter_mode == "future":
         for dex in dex_chains:
             dex_price = prices[dex]['spot']  # DEX only has spot price
             if not dex_price:
@@ -143,7 +143,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
             for ex in exchanges:
                 logger.debug(f"Comparing with CEX {ex}")
                 # DEX to CEX Spot
-                if prices[ex]['spot']:
+                if prices[ex]['spot'] and filter_mode != "future":
                     cex_spot_price = prices[ex]['spot']
                     spread = abs(cex_spot_price - dex_price)
                     
@@ -182,7 +182,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                         })
                 
                 # DEX to CEX Futures
-                if prices[ex]['futures']:
+                if prices[ex]['futures'] and (filter_mode == "all" or filter_mode == "future"):
                     cex_futures_price = prices[ex]['futures']
                     spread = abs(cex_futures_price - dex_price)
                     
@@ -222,6 +222,10 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
     
     # Compare all CEX combinations (always shown regardless of filter)
     for i in range(len(exchanges)):
+        # Skip CEX-CEX comparisons when in CEX-DEX only mode or future mode
+        if filter_mode == "cex_dex_only" or filter_mode == "future":
+            break
+            
         for j in range(len(exchanges)):
             if i != j:
                 ex1, ex2 = exchanges[i], exchanges[j]
@@ -431,13 +435,21 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
     result.append("</pre>")
     return "\n".join(result)
 
-async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0.1):
+async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0.1, network: str = None, pool_address: str = None):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
         # Get the filter preference for this chat_id
         filter_mode = user_filter_preferences.get(chat_id, "all")  # Default to showing all
-        logger.info(f"Starting monitoring for {query} with filter mode: {filter_mode}")
-        price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage, filter_mode)
+        logger.info(f"Starting monitoring for {query} with filter mode: {filter_mode} (raw value from dict)")
+        
+        # Validate the filter mode
+        if filter_mode not in ["cex_only", "cex_dex_only", "future", "all"]:
+            logger.warning(f"Invalid filter mode: {filter_mode}. Defaulting to 'all'")
+            filter_mode = "all"
+            
+        logger.info(f"Using filter mode: {filter_mode} for {query}")
+        
+        price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage, filter_mode, network, pool_address)
         await price_monitor.start_monitoring()
     except asyncio.CancelledError:
         logger.info(f"Monitoring stopped for {query}")
@@ -450,11 +462,21 @@ async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage
 class ArbitragePriceMonitor:
     """Class for monitoring prices and detecting arbitrage opportunities"""
     
-    def __init__(self, query: str, bot, min_arbitrage_percentage: float = 0.1, filter_mode: str = "all"):
+    def __init__(self, query: str, bot, min_arbitrage_percentage: float = 0.1, filter_mode: str = "all", 
+                 network: str = None, pool_address: str = None):
         self.query = query
         self.bot = bot
         self.min_arbitrage_percentage = min_arbitrage_percentage
-        self.filter_mode = filter_mode  # "all" or "cex_only"
+        # Make sure filter_mode is either "cex_only", "cex_dex_only", "future" or "all"
+        if filter_mode not in ["cex_only", "cex_dex_only", "future", "all"]:
+            logger.warning(f"Invalid filter_mode provided: {filter_mode}, defaulting to 'all'")
+            filter_mode = "all"
+        self.filter_mode = filter_mode  # "all", "cex_only", "cex_dex_only", or "future"
+        self.network = network  # Network for DEX operations (e.g., 'Ethereum', 'BSC')
+        self.pool_address = pool_address  # Pool address for DEX operations
+        logger.info(f"ArbitragePriceMonitor initialized with filter_mode: {self.filter_mode}")
+        if self.network and self.pool_address:
+            logger.info(f"DEX parameters provided - Network: {self.network}, Pool Address: {self.pool_address}")
         self.last_opportunities = set()
         self.alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
         self.topic_id = int(os.getenv("TOPIC_ID", "1"))
@@ -464,7 +486,7 @@ class ArbitragePriceMonitor:
             'ETH': 'ether',
             'BSC': 'bsc',
             'MATIC': 'polygon',
-            'ARBITRUM': 'arbitrum',
+            'ARBEVM': 'arbitrum',
             'OPTIMISM': 'optimism',
             'AVAX': 'avalanche'
         }
@@ -504,6 +526,25 @@ class ArbitragePriceMonitor:
         dex_prices = {}
         try:
             logger.info(f"Starting DEX price check for {self.query}")
+            
+            # If pool address and network are explicitly provided, use them directly
+            if self.network and self.pool_address:
+                logger.info(f"Using provided network and pool address: {self.network}, {self.pool_address}")
+                
+                # Initialize DexTools API
+                dex_tools = DexTools(api_key=os.getenv("DEXTOOLS_API_KEY"))
+                logger.info(f"Initialized DexTools with API key")
+                
+                dex_price = await self._get_pool_price(dex_tools, self.network, self.pool_address)
+                if dex_price:
+                    dex_prices[self.network] = {
+                        'spot': dex_price,
+                        'futures': None,
+                        'is_dex': True
+                    }
+                return dex_prices
+            
+            # Otherwise, use the traditional chain lookup method (fallback for compatibility)
             chains = await exchange_service.get_currency_chains("gate", self.query)
             logger.info(f"Retrieved chains for {self.query}: {chains}")
             
@@ -521,7 +562,7 @@ class ArbitragePriceMonitor:
                     logger.warning(f"Invalid chain data: {chain_name}, {contract_address}")
                     continue
                 
-                dex_price = await self._get_dex_price(dex_tools, chain_name, contract_address)
+                dex_price = await self._get_token_price(dex_tools, chain_name, contract_address)
                 if dex_price:
                     dex_prices[chain_name] = {
                         'spot': dex_price,
@@ -533,8 +574,8 @@ class ArbitragePriceMonitor:
         
         return dex_prices
     
-    async def _get_dex_price(self, dex_tools, chain_name: str, contract_address: str) -> Optional[float]:
-        """Get price for a specific DEX chain"""
+    async def _get_token_price(self, dex_tools, chain_name: str, contract_address: str) -> Optional[float]:
+        """Get token price for a specific DEX chain (legacy method)"""
         try:
             # Convert chain name to DexTools format
             dextools_chain = self.chain_mapping.get(chain_name.upper())
@@ -545,17 +586,43 @@ class ArbitragePriceMonitor:
             logger.info(f"Processing chain {chain_name} ({dextools_chain}) for token {self.query}")
             logger.debug(f"Contract address for {chain_name}: {contract_address}")
             
-            logger.info(f"Requesting DexTools price for {self.query} on {dextools_chain}")
+            logger.info(f"Requesting DexTools token price for {self.query} on {dextools_chain}")
             price = dex_tools.get_token_price(dextools_chain, contract_address)
             
             if price:
-                logger.info(f"Successfully got price for {self.query} on {dextools_chain}: ${price:.4f}")
+                logger.info(f"Successfully got token price for {self.query} on {dextools_chain}: ${price:.4f}")
                 return price
             else:
-                logger.warning(f"No price returned from DexTools for {self.query} on {dextools_chain}")
+                logger.warning(f"No token price returned from DexTools for {self.query} on {dextools_chain}")
                 return None
         except Exception as e:
-            logger.error(f"Error getting DEX price for chain {chain_name}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting token price for chain {chain_name}: {str(e)}", exc_info=True)
+            return None
+            
+    async def _get_pool_price(self, dex_tools, chain_name: str, pool_address: str) -> Optional[float]:
+        """Get pool price for a specific DEX chain"""
+        try:
+            # Convert chain name to DexTools format
+            dextools_chain = self.chain_mapping.get(chain_name.upper())
+            if not dextools_chain:
+                # Try to use the chain name directly if it's not in our mapping
+                dextools_chain = chain_name.lower()
+                logger.info(f"Using chain name directly for DexTools: {dextools_chain}")
+                
+            logger.info(f"Processing chain {chain_name} ({dextools_chain}) for pool for {self.query}")
+            logger.debug(f"Pool address for {chain_name}: {pool_address}")
+            
+            logger.info(f"Requesting DexTools pool price for {self.query} on {dextools_chain}")
+            price = dex_tools.get_pool_price(dextools_chain, pool_address)
+            
+            if price:
+                logger.info(f"Successfully got pool price for {self.query} on {dextools_chain}: ${price:.4f}")
+                return price
+            else:
+                logger.warning(f"No pool price returned from DexTools for {self.query} on {dextools_chain}")
+                return None
+        except Exception as e:
+            logger.error(f"Error getting pool price for chain {chain_name}: {str(e)}", exc_info=True)
             return None
     
     async def _fetch_cex_prices(self) -> Dict[str, Dict[str, Any]]:
@@ -904,12 +971,19 @@ async def handle_min_percentage(message: Message):
             del active_monitors[chat_id]
         
         # Get filter mode text for display
-        filter_mode_text = "CEX-CEX Only" if filter_mode == "cex_only" else "CEX-CEX + DEX"
+        if filter_mode == "cex_only":
+            mode_text = "CEX-CEX Only (no DEX)"
+        elif filter_mode == "cex_dex_only":
+            mode_text = "ONLY CEX-DEX"
+        elif filter_mode == "future":
+            mode_text = "DEX + CEX (ONLY FUTURE)"
+        else:
+            mode_text = "CEX-CEX + DEX"
         
         # Send initial message to alert group
         await bot.send_message(
             chat_id=alert_group_id,
-            text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...\nFilter mode: {filter_mode_text}",
+            text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...\nFilter mode: {mode_text}",
             message_thread_id=topic_id
         )
         
@@ -921,13 +995,13 @@ async def handle_min_percentage(message: Message):
         await bot.send_message(
             chat_id=alert_group_id,
             text=f"✅ Monitoring started for {query}!\n\n"
-                 f"Filter mode: {filter_mode_text}\n"
+                 f"Filter mode: {mode_text}\n"
                  f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
                  "Use /stop command to stop monitoring.",
             message_thread_id=topic_id
         )
         
-        await message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%\nFilter mode: {filter_mode_text}")
+        await message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%\nFilter mode: {mode_text}")
     except Exception as e:
         await message.answer(f"❌ Error starting monitoring: {str(e)}")
 
@@ -938,6 +1012,16 @@ def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
     builder.button(
         text="CEX-CEX Only",
         callback_data="filter_cex_only"
+    )
+    
+    builder.button(
+        text="ONLY CEX-DEX",
+        callback_data="filter_cex_dex_only"
+    )
+    
+    builder.button(
+        text="DEX + CEX (ONLY FUTURE)",
+        callback_data="filter_future"
     )
     
     builder.button(
@@ -963,7 +1047,7 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
         return
     
     # Extract filter mode from callback data
-    filter_mode = callback.data.split("_")[1]  # "cex_only" or "all"
+    filter_mode = callback.data.split("_")[1]  # "cex_only", "cex_dex_only", "future" or "all"
     
     # Store the user's preference
     user_filter_preferences[chat_id] = filter_mode
@@ -974,6 +1058,10 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     
     if filter_mode == "cex_only":
         mode_text = "CEX-CEX Only (no DEX)"
+    elif filter_mode == "cex_dex_only":
+        mode_text = "ONLY CEX-DEX"
+    elif filter_mode == "future":
+        mode_text = "DEX + CEX (ONLY FUTURE)"
     else:
         mode_text = "CEX-CEX + DEX"
     
