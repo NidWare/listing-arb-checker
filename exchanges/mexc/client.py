@@ -162,7 +162,7 @@ class MexcClient(BaseAPIClient):
         Returns:
             float: Current price of the symbol
         """
-        symbol = f"{symbol}USDT"
+        symbol = f"{symbol}USDT"    
         url = f"{self.BASE_URL}/ticker/24hr"
         params = {"symbol": symbol}
         
