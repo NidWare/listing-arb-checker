@@ -98,12 +98,16 @@ async def cmd_chat_info(message: Message):
             await message.bot.send_message(
                 chat_id=message.chat.id,
                 text=chat_info,
-                message_thread_id=config_topic_id
+                message_thread_id=config_topic_id,
+                parse_mode="HTML",
+                disable_web_page_preview=True
             )
         else:
             await message.bot.send_message(
                 chat_id=message.chat.id,
-                text=chat_info
+                text=chat_info,
+                parse_mode="HTML",
+                disable_web_page_preview=True
             )
     except Exception as e:
         logger.error(f"Error sending chat info: {str(e)}", exc_info=True)
@@ -111,7 +115,9 @@ async def cmd_chat_info(message: Message):
         try:
             await message.bot.send_message(
                 chat_id=message.chat.id,
-                text=f"Error sending with topic. Info:\n\n{chat_info}"
+                text=f"Error sending with topic. Info:\n\n{chat_info}",
+                parse_mode="HTML",
+                disable_web_page_preview=True
             )
         except Exception as e2:
             logger.error(f"Error sending fallback message: {str(e2)}", exc_info=True)
@@ -457,7 +463,7 @@ async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage
         logger.error(f"Error in price monitoring: {str(e)}")
         alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
         topic_id = int(os.getenv("TOPIC_ID", "1"))
-        await bot.send_message(alert_group_id, f"❌ Error in price monitoring: {str(e)}", message_thread_id=topic_id)
+        await bot.send_message(alert_group_id, f"❌ Error in price monitoring: {str(e)}", message_thread_id=topic_id, parse_mode="HTML", disable_web_page_preview=True)
 
 class ArbitragePriceMonitor:
     """Class for monitoring prices and detecting arbitrage opportunities"""
@@ -480,7 +486,7 @@ class ArbitragePriceMonitor:
         self.last_opportunities = set()
         self.alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
         self.topic_id = int(os.getenv("TOPIC_ID", "1"))
-        self.cex_exchanges = ["bitget", "gate", "mexc", "bybit"]
+        self.cex_exchanges = ["bitget", "gate", "mexc", "bybit", "bingx"]
         self.chain_mapping = {
             'BASEEVM': 'base',
             'ETH': 'ether',
@@ -660,23 +666,32 @@ class ArbitragePriceMonitor:
     
     def _format_price_message(self, prices: Dict[str, Dict[str, Any]]) -> str:
         """Format the price message to display to users"""
-        price_message = f"📊 Current prices for {self.query}:\n\n"
+        token_symbol = self.query.upper()
+        price_message = f"📊 Current prices for {token_symbol}:\n\n"
         
         # Add DEX prices
         for exchange, price_data in prices.items():
             if price_data.get('is_dex', False) and price_data.get('spot'):
-                price_message += f"DEX ({exchange.upper()}): ${price_data['spot']:.4f}\n\n"
+                dex_url = self._get_dextools_url(exchange, self.pool_address)
+                
+                if dex_url:
+                    price_message += f"DEX (<a href='{dex_url}'>{exchange.upper()}</a>): ${price_data['spot']:.4f}\n\n"
+                else:
+                    price_message += f"DEX ({exchange.upper()}): ${price_data['spot']:.4f}\n\n"
         
         # Add CEX prices
         for exchange in self.cex_exchanges:
             if exchange in prices:
+                spot_url = self._get_exchange_url(exchange, 'spot', token_symbol)
+                futures_url = self._get_exchange_url(exchange, 'futures', token_symbol)
+                
                 if prices[exchange].get('spot'):
-                    price_message += f"{exchange.upper()} Spot: ${prices[exchange]['spot']:.4f}\n"
+                    price_message += f"<a href='{spot_url}'>{exchange.upper()} Spot</a>: ${prices[exchange]['spot']:.4f}\n"
                 else:
                     price_message += f"{exchange.upper()} Spot: Not available\n"
                 
                 if prices[exchange].get('futures'):
-                    price_message += f"{exchange.upper()} Futures: ${prices[exchange]['futures']:.4f}\n"
+                    price_message += f"<a href='{futures_url}'>{exchange.upper()} Futures</a>: ${prices[exchange]['futures']:.4f}\n"
                 else:
                     price_message += f"{exchange.upper()} Futures: Not available\n"
                 
@@ -781,6 +796,64 @@ class ArbitragePriceMonitor:
             
         return opp_id
     
+    def _get_exchange_url(self, exchange: str, market_type: str, token_symbol: str) -> str:
+        """
+        Generate a URL for the given exchange, market type, and token symbol
+        
+        Args:
+            exchange: Exchange name (gate, bitget, bybit, mexc, bingx)
+            market_type: 'spot' or 'futures'
+            token_symbol: Token symbol (e.g. BTC)
+            
+        Returns:
+            URL for the exchange
+        """
+        exchange = exchange.lower()
+        
+        if market_type == 'spot':
+            if exchange == 'gate':
+                return f"https://www.gate.io/ru/trade/{token_symbol}_USDT"
+            elif exchange == 'bitget':
+                return f"https://www.bitget.com/ru/spot/{token_symbol}USDC"
+            elif exchange == 'bybit':
+                return f"https://www.bybit.com/ru-RU/trade/spot/{token_symbol}/USDT"
+            elif exchange == 'mexc':
+                return f"https://www.mexc.com/ru-RU/exchange/{token_symbol}_USDT?_from=search_spot_trade"
+            elif exchange == 'bingx':
+                return f"https://bingx.com/en/spot/{token_symbol}USDT/"
+        
+        elif market_type == 'futures':
+            if exchange == 'gate':
+                return f"https://www.gate.io/ru/futures/USDT/{token_symbol}_USDT"
+            elif exchange == 'bitget':
+                return f"https://www.bitget.com/ru/futures/usdt/{token_symbol}USDT"
+            elif exchange == 'bybit':
+                return f"https://www.bybit.com/trade/usdt/{token_symbol}USDT"
+            elif exchange == 'mexc':
+                return f"https://futures.mexc.com/ru-RU/exchange/{token_symbol}_USDT?type=linear_swap"
+            elif exchange == 'bingx':
+                return f"https://bingx.com/en/perpetual/{token_symbol}-USDT/"
+        
+        # Default fallback - return empty string if no match
+        return ""
+    
+    def _get_dextools_url(self, dex_name: str, pool_address: str = None) -> str:
+        """
+        Generate a DexTools URL for the given DEX and pool address
+        
+        Args:
+            dex_name: DEX name
+            pool_address: Pool address (if available)
+            
+        Returns:
+            DexTools URL
+        """
+        if not pool_address:
+            return ""
+            
+        # Default to BASE chain for now, but this could be enhanced to support multiple chains
+        return f"https://www.dextools.io/app/en/base/pair-explorer/{pool_address}"
+    
     def _format_opportunity_alert(self, opp: Dict, timestamp: str) -> Optional[str]:
         """Format an alert message for a new arbitrage opportunity"""
         try:
@@ -791,72 +864,109 @@ class ArbitragePriceMonitor:
                 
             alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
             
+            # Extract token symbol from the query
+            token_symbol = self.query.upper()
+            
             # DEX to CEX Spot
             if opp['type'] == 'dex_to_cex_spot' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+                cex_url = self._get_exchange_url(opp['cex'], 'spot', token_symbol)
+                dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
+                
+                dex_name = f"{opp['dex'].upper()} DEX"
+                if dex_url:
+                    dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
+                
                 alert_msg += (
                     f"Type: DEX to CEX Spot\n"
-                    f"Buy on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
-                    f"Sell on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
+                    f"Buy on: {dex_name} at ${opp['dex_price']:.4f}\n"
+                    f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${opp['cex_price']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
                     f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             
             # CEX to DEX Spot
             elif opp['type'] == 'cex_to_dex_spot' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+                cex_url = self._get_exchange_url(opp['cex'], 'spot', token_symbol)
+                dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
+                
+                dex_name = f"{opp['dex'].upper()} DEX"
+                if dex_url:
+                    dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
+                
                 alert_msg += (
                     f"Type: CEX to DEX Spot\n"
-                    f"Buy on: {opp['cex'].upper()} at ${opp['cex_price']:.4f}\n"
-                    f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                    f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${opp['cex_price']:.4f}\n"
+                    f"Sell on: {dex_name} at ${opp['dex_price']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
                     f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             
             # DEX to CEX Futures
             elif opp['type'] == 'dex_to_cex_futures' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+                cex_url = self._get_exchange_url(opp['cex'], 'futures', token_symbol)
+                dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
+                
+                dex_name = f"{opp['dex'].upper()} DEX"
+                if dex_url:
+                    dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
+                
                 alert_msg += (
                     f"Type: DEX to CEX Futures\n"
-                    f"Buy on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
-                    f"Sell on: {opp['cex'].upper()} Futures at ${opp['cex_price']:.4f}\n"
+                    f"Buy on: {dex_name} at ${opp['dex_price']:.4f}\n"
+                    f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${opp['cex_price']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
                     f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             
             # CEX to DEX Futures
             elif opp['type'] == 'cex_to_dex_futures' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+                cex_url = self._get_exchange_url(opp['cex'], 'futures', token_symbol)
+                dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
+                
+                dex_name = f"{opp['dex'].upper()} DEX"
+                if dex_url:
+                    dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
+                
                 alert_msg += (
                     f"Type: CEX to DEX Futures\n"
-                    f"Buy on: {opp['cex'].upper()} Futures at ${opp['cex_price']:.4f}\n"
-                    f"Sell on: {opp['dex'].upper()} DEX at ${opp['dex_price']:.4f}\n"
+                    f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${opp['cex_price']:.4f}\n"
+                    f"Sell on: {dex_name} at ${opp['dex_price']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
                     f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             
             # CEX to CEX Spot
             elif opp['type'] == 'cross_exchange_spot' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
+                exchange1_url = self._get_exchange_url(opp['exchange1'], 'spot', token_symbol)
+                exchange2_url = self._get_exchange_url(opp['exchange2'], 'spot', token_symbol)
                 alert_msg += (
                     f"Type: CEX to CEX Spot\n"
-                    f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
-                    f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
+                    f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${opp['price1']:.4f}\n"
+                    f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${opp['price2']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
                     f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             
             # CEX to CEX Futures
             elif opp['type'] == 'cross_exchange_futures' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
+                exchange1_url = self._get_exchange_url(opp['exchange1'], 'futures', token_symbol)
+                exchange2_url = self._get_exchange_url(opp['exchange2'], 'futures', token_symbol)
                 alert_msg += (
                     f"Type: CEX to CEX Futures\n"
-                    f"Buy on: {opp['exchange1'].upper()} at ${opp['price1']:.4f}\n"
-                    f"Sell on: {opp['exchange2'].upper()} at ${opp['price2']:.4f}\n"
+                    f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${opp['price1']:.4f}\n"
+                    f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${opp['price2']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
                     f"Profit potential: ${opp['spread']:.4f}\n"
                 )
             
             # CEX Spot to CEX Futures (Cross-exchange)
             elif opp['type'] == 'cross_exchange_spot_futures' and all(k in opp for k in ['spot_exchange', 'futures_exchange', 'spot_price', 'futures_price', 'percentage']):
+                spot_url = self._get_exchange_url(opp['spot_exchange'], 'spot', token_symbol)
+                futures_url = self._get_exchange_url(opp['futures_exchange'], 'futures', token_symbol)
                 alert_msg += (
                     f"Type: CEX Spot to CEX Futures\n"
-                    f"Buy on: {opp['spot_exchange'].upper()} (Spot) at ${opp['spot_price']:.4f}\n"
-                    f"Sell on: {opp['futures_exchange'].upper()} (Futures) at ${opp['futures_price']:.4f}\n"
+                    f"Buy on: <a href='{spot_url}'>{opp['spot_exchange'].upper()}</a> (Spot) at ${opp['spot_price']:.4f}\n"
+                    f"Sell on: <a href='{futures_url}'>{opp['futures_exchange'].upper()}</a> (Futures) at ${opp['futures_price']:.4f}\n"
                     f"Price difference: {opp['percentage']:.2f}%\n"
                     f"Profit potential: ${opp['spread']:.4f}\n"
                 )
@@ -877,7 +987,9 @@ class ArbitragePriceMonitor:
             await self.bot.send_message(
                 self.alert_group_id, 
                 message, 
-                message_thread_id=self.topic_id
+                message_thread_id=self.topic_id,
+                parse_mode="HTML",
+                disable_web_page_preview=True
             )
 
 @router.message(Command("stop"))
@@ -900,7 +1012,7 @@ async def cmd_stop(message: Message):
         active_monitors[chat_id].cancel()
         del active_monitors[chat_id]
         # Send confirmation to both alert group and admin
-        await bot.send_message(alert_group_id, "✅ Monitoring stopped", message_thread_id=topic_id)
+        await bot.send_message(alert_group_id, "✅ Monitoring stopped", message_thread_id=topic_id, parse_mode="HTML", disable_web_page_preview=True)
         await message.answer("✅ Monitoring stopped in the alert group")
     else:
         await message.answer("❌ No active monitoring found")
@@ -984,7 +1096,9 @@ async def handle_min_percentage(message: Message):
         await bot.send_message(
             chat_id=alert_group_id,
             text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...\nFilter mode: {mode_text}",
-            message_thread_id=topic_id
+            message_thread_id=topic_id,
+            parse_mode="HTML",
+            disable_web_page_preview=True
         )
         
         # Start new monitoring task with the target chat ID, bot instance, minimum percentage, and filter mode
@@ -998,7 +1112,9 @@ async def handle_min_percentage(message: Message):
                  f"Filter mode: {mode_text}\n"
                  f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
                  "Use /stop command to stop monitoring.",
-            message_thread_id=topic_id
+            message_thread_id=topic_id,
+            parse_mode="HTML",
+            disable_web_page_preview=True
         )
         
         await message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%\nFilter mode: {mode_text}")
@@ -1035,43 +1151,66 @@ def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
 @router.callback_query(F.data.startswith("filter_"))
 async def handle_filter_mode_callback(callback: CallbackQuery):
     """Handle filter mode selection"""
+    filter_mode = callback.data.split("_")[1]
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id
-    
-    logger.info(f"Received filter callback from user {user_id}: {callback.data}")
+    query = user_queries.get(chat_id, {}).get('query', '')
+    min_percentage = user_queries.get(chat_id, {}).get('min_percentage', MIN_ARBITRAGE_PERCENTAGE)
+    alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
+    topic_id = int(os.getenv("TOPIC_ID", "0"))  # Get topic ID from env
+    bot = callback.bot
     
     # Check if user is admin
     if not is_admin(user_id):
-        logger.warning(f"Non-admin user {user_id} attempted to change filter settings")
-        await callback.answer("Only admins can change filter settings", show_alert=True)
+        await callback.answer("❌ Only admins can start monitoring")
         return
     
-    # Extract filter mode from callback data
-    filter_mode = callback.data.split("_")[1]  # "cex_only", "cex_dex_only", "future" or "all"
+    # Update filter mode in user_queries
+    if chat_id in user_queries:
+        user_queries[chat_id]['filter_mode'] = filter_mode
     
-    # Store the user's preference
-    user_filter_preferences[chat_id] = filter_mode
-    logger.info(f"Set filter mode for user {user_id} to {filter_mode}")
-    
-    # Get the stored query or ask for a new one
-    query = user_queries.get(chat_id)
-    
-    if filter_mode == "cex_only":
-        mode_text = "CEX-CEX Only (no DEX)"
-    elif filter_mode == "cex_dex_only":
-        mode_text = "ONLY CEX-DEX"
-    elif filter_mode == "future":
-        mode_text = "DEX + CEX (ONLY FUTURE)"
-    else:
-        mode_text = "CEX-CEX + DEX"
-    
-    # Always answer the callback to prevent the "loading" state in Telegram
-    await callback.answer(f"Filter set to: {mode_text}")
-    
-    # If we have a pending query, ask for percentage
-    if query:
-        logger.info(f"User {user_id} has pending query {query}, asking for percentage")
-        await callback.message.answer(f"Filter set to: {mode_text}\n\nPlease enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)")
-    else:
-        logger.info(f"User {user_id} has no pending query, asking for coin name")
-        await callback.message.answer(f"Filter set to: {mode_text}\n\nPlease send a coin name to start monitoring.") 
+    try:
+        if chat_id in active_monitors:
+            active_monitors[chat_id].cancel()
+            del active_monitors[chat_id]
+        
+        # Translate filter mode for display
+        if filter_mode == "dex_only":
+            mode_text = "DEX Only (no CEX)"
+        elif filter_mode == "cex_only":
+            mode_text = "CEX-CEX Only (no DEX)"
+        elif filter_mode == "cex_dex_only":
+            mode_text = "ONLY CEX-DEX"
+        elif filter_mode == "future":
+            mode_text = "DEX + CEX (ONLY FUTURE)"
+        else:
+            mode_text = "CEX-CEX + DEX"
+        
+        # Send initial message to alert group
+        await bot.send_message(
+            chat_id=alert_group_id,
+            text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...\nFilter mode: {mode_text}",
+            message_thread_id=topic_id,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+        
+        # Start new monitoring task with the target chat ID, bot instance, minimum percentage, and filter mode
+        task = asyncio.create_task(monitor_prices(chat_id, query, bot, min_percentage))
+        active_monitors[chat_id] = task
+        
+        # Send confirmation to both alert group and admin
+        await bot.send_message(
+            chat_id=alert_group_id,
+            text=f"✅ Monitoring started for {query}!\n\n"
+                 f"Filter mode: {mode_text}\n"
+                 f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
+                 "Use /stop command to stop monitoring.",
+            message_thread_id=topic_id,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+        
+        await callback.message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%\nFilter mode: {mode_text}")
+    except Exception as e:
+        await callback.answer(f"❌ Error starting monitoring: {str(e)}") 

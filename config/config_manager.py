@@ -67,4 +67,15 @@ class ConfigManager:
         return {
             'api_key': api_key,
             'api_secret': api_secret
+        }
+
+    @staticmethod
+    def get_bingx_credentials() -> dict:
+        api_key = os.getenv('BINGX_API_KEY')
+        api_secret = os.getenv('BINGX_API_SECRET')
+        if not api_key or not api_secret:
+            raise ValueError("BingX credentials not found in environment variables")
+        return {
+            'api_key': api_key,
+            'api_secret': api_secret
         } 
