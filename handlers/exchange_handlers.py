@@ -852,7 +852,7 @@ class ArbitragePriceMonitor:
             return ""
             
         # Default to BASE chain for now, but this could be enhanced to support multiple chains
-        return f"https://www.dextools.io/app/en/base/pair-explorer/{pool_address}"
+        return f"https://www.dextools.io/app/en/{dex_name}/pair-explorer/{pool_address}"
     
     def _format_opportunity_alert(self, opp: Dict, timestamp: str) -> Optional[str]:
         """Format an alert message for a new arbitrage opportunity"""
