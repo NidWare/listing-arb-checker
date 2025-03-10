@@ -178,4 +178,38 @@ class MexcClient(BaseAPIClient):
         except Exception as e:
             logger.error(f"Error fetching spot price for {symbol}: {str(e)}")
             return None
+
+    async def check_token_availability(self, symbol: str) -> Dict[str, bool]:
+        """
+        Check if a token is available for deposit and withdrawal on MEXC.
+        
+        Args:
+            symbol: The token symbol to check
+            
+        Returns:
+            Dict with keys 'deposit' and 'withdrawal', each with boolean values
+            indicating availability status
+        """
+        # Ensure session exists
+        await self.ensure_session()
+        
+        # Placeholder implementation - to be completed
+        try:
+            coins_info = await self.get_all_coins()
+            
+            if not coins_info or "data" not in coins_info:
+                logger.error(f"Failed to retrieve coins info from MEXC")
+                return {"deposit": False, "withdrawal": False}
+                
+            # In a real implementation, this would search for the symbol in the coins_info
+            # and extract the deposit and withdrawal status
+            # For now, we return default values
+            return {
+                "deposit": False,  # Replace with actual logic
+                "withdrawal": False  # Replace with actual logic
+            }
+        except Exception as e:
+            logger.error(f"Error checking token availability for {symbol}: {e}")
+            return {"deposit": False, "withdrawal": False}
+
     # Add other async methods as needed 

@@ -51,5 +51,36 @@ class BitgetClient(BaseAPIClient):
                 data = await response.json()
                 if data['code'] == '00000' and data['data']:
                     return float(data['data'][0]['lastPr'])
-                raise Exception(f"Failed to get futures price: {data['msg']}") 
+                raise Exception(f"Failed to get futures price: {data['msg']}")
+                
+    async def check_token_availability(self, symbol: str) -> Dict[str, bool]:
+        """
+        Check if a token is available for deposit and withdrawal on Bitget.
+        
+        Args:
+            symbol: The token symbol to check
+            
+        Returns:
+            Dict with keys 'deposit' and 'withdrawal', each with boolean values
+            indicating availability status
+        """
+        # Placeholder implementation - to be completed
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.bitget.com/api/v2/spot/public/coins"
+            
+            try:
+                async with session.get(url) as response:
+                    data = await response.json()
+                    if data['code'] == '00000' and data['data']:
+                        # In a real implementation, search through data for the specific coin
+                        # and check its deposit and withdrawal status
+                        # For now, return default values
+                        return {
+                            "deposit": False,  # Replace with actual logic
+                            "withdrawal": False  # Replace with actual logic
+                        }
+                    else:
+                        return {"deposit": False, "withdrawal": False}
+            except Exception as e:
+                return {"deposit": False, "withdrawal": False} 
             

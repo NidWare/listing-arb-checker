@@ -306,4 +306,37 @@ class BingxClient(BaseAPIClient):
         account_info = await self.get_account_information()
         if 'balances' in account_info:
             return account_info['balances']
-        raise Exception(f"Failed to get balances: {account_info}") 
+        raise Exception(f"Failed to get balances: {account_info}")
+    
+    async def check_token_availability(self, symbol: str) -> Dict[str, bool]:
+        """
+        Check if a token is available for deposit and withdrawal on BingX.
+        
+        Args:
+            symbol: The token symbol to check
+            
+        Returns:
+            Dict with keys 'deposit' and 'withdrawal', each with boolean values
+            indicating availability status
+        """
+        # Ensure session exists
+        await self.ensure_session()
+        
+        # Placeholder implementation - to be completed
+        try:
+            # BingX API endpoint for getting coin information
+            url = f"{self.BASE_URL}api/v3/capital/config/getall"
+            response = await self.make_request_async('GET', url, is_signed=True)
+            
+            if not response or not response.get('data'):
+                return {"deposit": False, "withdrawal": False}
+                
+            # In a real implementation, search through data for the specific coin
+            # and check its deposit and withdrawal status
+            # For now, return default values
+            return {
+                "deposit": False,  # Replace with actual logic
+                "withdrawal": False  # Replace with actual logic
+            }
+        except Exception as e:
+            return {"deposit": False, "withdrawal": False} 

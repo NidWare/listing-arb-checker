@@ -42,9 +42,59 @@ class GateClient:
 
     def _get_headers(self) -> Dict[str, str]:
         return {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "DepositChecker/1.0"
         }
+
+    async def check_token_availability(self, symbol: str) -> Dict[str, bool]:
+        """
+        Check if a token is available for deposit and withdrawal on Gate.io.
+        
+        Args:
+            symbol: The token symbol to check
+            
+        Returns:
+            Dict with keys 'deposit' and 'withdrawal', each with boolean values
+            indicating availability status
+        """
+        async with aiohttp.ClientSession(headers=self._get_headers()) as session:
+            url = f"{self.base_url}/wallet/currency_chains"
+            params = {"currency": symbol}
+            
+            try:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        # Initialize with unavailable status
+                        deposit_available = False
+                        withdrawal_available = False
+                        
+                        # Check all chains for the currency
+                        for chain in data:
+                            # If any chain has deposits enabled (is_deposit_disabled=0), mark deposits as available
+                            if chain.get("is_deposit_disabled", 1) == 0:
+                                deposit_available = True
+                                
+                            # If any chain has withdrawals enabled (is_withdraw_disabled=0), mark withdrawals as available
+                            if chain.get("is_withdraw_disabled", 1) == 0:
+                                withdrawal_available = True
+                                
+                            # If both are already available, we can stop checking
+                            if deposit_available and withdrawal_available:
+                                break
+                                
+                        return {
+                            "deposit": deposit_available,
+                            "withdrawal": withdrawal_available
+                        }
+                    else:
+                        logging.error(f"Error checking token availability for {symbol}: Status {response.status}")
+                        return {"deposit": False, "withdrawal": False}
+            except Exception as e:
+                logging.error(f"Error checking token availability for {symbol}: {e}")
+                return {"deposit": False, "withdrawal": False}
 
     async def get_currency_chains(self, currency: str) -> List[Tuple[str, str]]:
         """

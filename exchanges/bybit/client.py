@@ -155,4 +155,33 @@ class BybitClient(BaseAPIClient):
         except Exception as e:
             logger.error(f"Error fetching spot price for {symbol}: {str(e)}")
             return None
+
+    async def check_token_availability(self, symbol: str) -> Dict[str, bool]:
+        """
+        Check if a token is available for deposit and withdrawal on Bybit.
+        
+        Args:
+            symbol: The token symbol to check
+            
+        Returns:
+            Dict with keys 'deposit' and 'withdrawal', each with boolean values
+            indicating availability status
+        """
+        # Ensure session exists
+        await self.ensure_session()
+        
+        # Placeholder implementation - to be completed
+        url = f"{self.base_url}/asset/coin/query-info"
+        timestamp = self.get_timestamp()
+        params = f"timestamp={timestamp}&recvWindow={self.recv_window}"
+        signature = self.generate_signature(timestamp, params)
+        headers = self.get_headers(timestamp, signature)
+        
+        try:
+            # This will need to be implemented to query coin info and check availability
+            response = {"deposit": False, "withdrawal": False}
+            return response
+        except Exception as e:
+            logger.error(f"Error checking token availability for {symbol}: {e}")
+            return {"deposit": False, "withdrawal": False}
         
