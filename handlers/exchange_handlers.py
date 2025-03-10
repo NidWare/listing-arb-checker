@@ -15,6 +15,27 @@ import os
 PRICE_CHECK_INTERVAL = 60  # seconds
 MIN_ARBITRAGE_PERCENTAGE = 0.1  # 0.1%
 
+# Define a helper function for price formatting
+def format_price(price: float) -> str:
+    """
+    Format price with appropriate precision based on its magnitude:
+    - For very small values (< 0.0001): show up to 8 decimal places
+    - For small values (< 0.01): show up to 6 decimal places
+    - For medium values (< 1): show up to 5 decimal places
+    - For larger values: show 4 decimal places
+    """
+    if price is None:
+        return "N/A"
+        
+    if price < 0.0001:
+        return f"{price:.8f}"
+    elif price < 0.01:
+        return f"{price:.6f}"
+    elif price < 1:
+        return f"{price:.5f}"
+    else:
+        return f"{price:.4f}"
+
 # Track active monitoring tasks
 active_monitors = {}
 
@@ -144,7 +165,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                 logger.warning(f"No price found for DEX {dex}")
                 continue
                 
-            logger.info(f"Processing DEX {dex} with price ${dex_price:.4f}")
+            logger.info(f"Processing DEX {dex} with price ${format_price(dex_price)}")
             
             for ex in exchanges:
                 logger.debug(f"Comparing with CEX {ex}")
@@ -155,11 +176,11 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                     
                     # Check DEX -> CEX opportunity
                     dex_to_cex_percentage = calc_percentage(dex_price, cex_spot_price)
-                    logger.debug(f"DEX->CEX Spot: {dex}->{ex}: {dex_price:.4f}->{cex_spot_price:.4f} = {dex_to_cex_percentage:.2f}%")
+                    logger.debug(f"DEX->CEX Spot: {dex}->{ex}: {format_price(dex_price)}->{format_price(cex_spot_price)} = {dex_to_cex_percentage:.2f}%")
                     
                     # Check CEX -> DEX opportunity
                     cex_to_dex_percentage = calc_percentage(cex_spot_price, dex_price)
-                    logger.debug(f"CEX->DEX Spot: {ex}->{dex}: {cex_spot_price:.4f}->{dex_price:.4f} = {cex_to_dex_percentage:.2f}%")
+                    logger.debug(f"CEX->DEX Spot: {ex}->{dex}: {format_price(cex_spot_price)}->{format_price(dex_price)} = {cex_to_dex_percentage:.2f}%")
                     
                     # Add DEX -> CEX opportunity if profitable
                     if dex_to_cex_percentage >= min_arbitrage_percentage:
@@ -194,11 +215,11 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                     
                     # Check DEX -> CEX Futures opportunity
                     dex_to_cex_percentage = calc_percentage(dex_price, cex_futures_price)
-                    logger.debug(f"DEX->CEX Futures: {dex}->{ex}: {dex_price:.4f}->{cex_futures_price:.4f} = {dex_to_cex_percentage:.2f}%")
+                    logger.debug(f"DEX->CEX Futures: {dex}->{ex}: {format_price(dex_price)}->{format_price(cex_futures_price)} = {dex_to_cex_percentage:.2f}%")
                     
                     # Check CEX -> DEX Futures opportunity
                     cex_to_dex_percentage = calc_percentage(cex_futures_price, dex_price)
-                    logger.debug(f"CEX->DEX Futures: {ex}->{dex}: {cex_futures_price:.4f}->{dex_price:.4f} = {cex_to_dex_percentage:.2f}%")
+                    logger.debug(f"CEX->DEX Futures: {ex}->{dex}: {format_price(cex_futures_price)}->{format_price(dex_price)} = {cex_to_dex_percentage:.2f}%")
                     
                     # Add DEX -> CEX Futures opportunity if profitable
                     if dex_to_cex_percentage >= min_arbitrage_percentage:
@@ -245,8 +266,8 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                     percentage1 = calc_percentage(price1, price2)
                     percentage2 = calc_percentage(price2, price1)
                     
-                    logger.debug(f"CEX Spot {ex1}->{ex2}: {price1:.4f}->{price2:.4f} = {percentage1:.2f}%")
-                    logger.debug(f"CEX Spot {ex2}->{ex1}: {price2:.4f}->{price1:.4f} = {percentage2:.2f}%")
+                    logger.debug(f"CEX Spot {ex1}->{ex2}: {format_price(price1)}->{format_price(price2)} = {percentage1:.2f}%")
+                    logger.debug(f"CEX Spot {ex2}->{ex1}: {format_price(price2)}->{format_price(price1)} = {percentage2:.2f}%")
                     
                     # Add opportunity if profitable in either direction
                     if percentage1 >= min_arbitrage_percentage:
@@ -281,8 +302,8 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                     percentage1 = calc_percentage(price1, price2)
                     percentage2 = calc_percentage(price2, price1)
                     
-                    logger.debug(f"CEX Futures {ex1}->{ex2}: {price1:.4f}->{price2:.4f} = {percentage1:.2f}%")
-                    logger.debug(f"CEX Futures {ex2}->{ex1}: {price2:.4f}->{price1:.4f} = {percentage2:.2f}%")
+                    logger.debug(f"CEX Futures {ex1}->{ex2}: {format_price(price1)}->{format_price(price2)} = {percentage1:.2f}%")
+                    logger.debug(f"CEX Futures {ex2}->{ex1}: {format_price(price2)}->{format_price(price1)} = {percentage2:.2f}%")
                     
                     # Add opportunity if profitable in either direction
                     if percentage1 >= min_arbitrage_percentage:
@@ -316,7 +337,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                     
                     # Calculate percentage
                     percentage = calc_percentage(spot_price, futures_price)
-                    logger.debug(f"CEX Spot->Futures {ex1}->{ex2}: {spot_price:.4f}->{futures_price:.4f} = {percentage:.2f}%")
+                    logger.debug(f"CEX Spot->Futures {ex1}->{ex2}: {format_price(spot_price)}->{format_price(futures_price)} = {percentage:.2f}%")
                     
                     if percentage >= min_arbitrage_percentage:
                         logger.info(f"Found CEX Spot->Futures opportunity: {ex1}->{ex2} with {percentage:.2f}%")
@@ -338,7 +359,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                     
                     # Calculate percentage
                     percentage = calc_percentage(futures_price, spot_price)
-                    logger.debug(f"CEX Futures->Spot {ex1}->{ex2}: {futures_price:.4f}->{spot_price:.4f} = {percentage:.2f}%")
+                    logger.debug(f"CEX Futures->Spot {ex1}->{ex2}: {format_price(futures_price)}->{format_price(spot_price)} = {percentage:.2f}%")
                     
                     if percentage >= min_arbitrage_percentage:
                         logger.info(f"Found CEX Futures->Spot opportunity: {ex1}->{ex2} with {percentage:.2f}%")
@@ -360,7 +381,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                     
                     # Calculate percentage
                     percentage = calc_percentage(spot_price, futures_price)
-                    logger.debug(f"Same CEX Spot->Futures {ex1}: {spot_price:.4f}->{futures_price:.4f} = {percentage:.2f}%")
+                    logger.debug(f"Same CEX Spot->Futures {ex1}: {format_price(spot_price)}->{format_price(futures_price)} = {percentage:.2f}%")
                     
                     if percentage >= min_arbitrage_percentage:
                         logger.info(f"Found same-exchange Spot->Futures opportunity on {ex1} with {percentage:.2f}%")
@@ -393,7 +414,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             cex = f"{opp['cex'].upper():6}"
             route = f"{dex}→ {cex}"
             result.append(
-                f"DEX→S    {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"DEX→S    {route:<15} {opp['percentage']:>5.1f}%  ${format_price(opp['spread']):>5.2f}"
             )
         
         elif opp['type'] == 'dex_to_cex_futures':
@@ -401,7 +422,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             cex = f"{opp['cex'].upper():6}"
             route = f"{dex}→ {cex}"
             result.append(
-                f"DEX→F    {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"DEX→F    {route:<15} {opp['percentage']:>5.1f}%  ${format_price(opp['spread']):>5.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_spot':
@@ -409,7 +430,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             ex2 = f"{opp['exchange2'].upper():6}"
             route = f"{ex1}→ {ex2}"
             result.append(
-                f"S         {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"S         {route:<15} {opp['percentage']:>5.1f}%  ${format_price(opp['spread']):>5.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_futures':
@@ -417,7 +438,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             ex2 = f"{opp['exchange2'].upper():6}"
             route = f"{ex1}→ {ex2}"
             result.append(
-                f"F         {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"F         {route:<15} {opp['percentage']:>5.1f}%  ${format_price(opp['spread']):>5.2f}"
             )
         
         elif opp['type'] == 'cross_exchange_spot_futures':
@@ -429,13 +450,13 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
             else:
                 cross_type = "F→S"
             result.append(
-                f"CROSS {cross_type} {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"CROSS {cross_type} {route:<15} {opp['percentage']:>5.1f}%  ${format_price(opp['spread']):>5.2f}"
             )
         
         else:  # same_exchange_spot_futures
             route = f"{opp['exchange'].upper():15}"
             result.append(
-                f"S/F       {route:<15} {opp['percentage']:>5.1f}%  ${profit:>5.2f}"
+                f"S/F       {route:<15} {opp['percentage']:>5.1f}%  ${format_price(opp['spread']):>5.2f}"
             )
     
     result.append("</pre>")
@@ -595,8 +616,8 @@ class ArbitragePriceMonitor:
             logger.info(f"Requesting DexTools token price for {self.query} on {dextools_chain}")
             price = dex_tools.get_token_price(dextools_chain, contract_address)
             
-            if price:
-                logger.info(f"Successfully got token price for {self.query} on {dextools_chain}: ${price:.4f}")
+            if price is not None:
+                logger.info(f"Successfully got token price for {self.query} on {dextools_chain}: ${format_price(price)}")
                 return price
             else:
                 logger.warning(f"No token price returned from DexTools for {self.query} on {dextools_chain}")
@@ -621,8 +642,8 @@ class ArbitragePriceMonitor:
             logger.info(f"Requesting DexTools pool price for {self.query} on {dextools_chain}")
             price = dex_tools.get_pool_price(dextools_chain, pool_address)
             
-            if price:
-                logger.info(f"Successfully got pool price for {self.query} on {dextools_chain}: ${price:.4f}")
+            if price is not None:
+                logger.info(f"Successfully got pool price for {self.query} on {dextools_chain}: ${format_price(price)}")
                 return price
             else:
                 logger.warning(f"No pool price returned from DexTools for {self.query} on {dextools_chain}")
@@ -675,9 +696,9 @@ class ArbitragePriceMonitor:
                 dex_url = self._get_dextools_url(exchange, self.pool_address)
                 
                 if dex_url:
-                    price_message += f"DEX (<a href='{dex_url}'>{exchange.upper()}</a>): ${price_data['spot']:.4f}\n\n"
+                    price_message += f"DEX (<a href='{dex_url}'>{exchange.upper()}</a>): ${format_price(price_data['spot'])}\n\n"
                 else:
-                    price_message += f"DEX ({exchange.upper()}): ${price_data['spot']:.4f}\n\n"
+                    price_message += f"DEX ({exchange.upper()}): ${format_price(price_data['spot'])}\n\n"
         
         # Add CEX prices
         for exchange in self.cex_exchanges:
@@ -685,8 +706,10 @@ class ArbitragePriceMonitor:
                 spot_url = self._get_exchange_url(exchange, 'spot', token_symbol)
                 futures_url = self._get_exchange_url(exchange, 'futures', token_symbol)
                 
+                # Start with the exchange name
+                price_message += f"<b>{exchange.upper()}</b>\n"
+                
                 # Get token availability status for Gate.io
-                token_availability_info = ""
                 if exchange == "gate":
                     try:
                         # Get token availability from Gate.io
@@ -697,19 +720,21 @@ class ArbitragePriceMonitor:
                         deposit_status = "✅" if availability.get("deposit", False) else "❌"
                         withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
                         
-                        token_availability_info = f"\n<b>Gate.io Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}"
+                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
                     except Exception as e:
                         logger.error(f"Error getting token availability for {self.query} on Gate.io: {str(e)}")
                 
+                # Add spot price
                 if prices[exchange].get('spot'):
-                    price_message += f"<a href='{spot_url}'>{exchange.upper()} Spot</a>: ${prices[exchange]['spot']:.4f}{token_availability_info if exchange == 'gate' else ''}\n"
+                    price_message += f"<a href='{spot_url}'>Spot</a>: ${format_price(prices[exchange]['spot'])}\n"
                 else:
-                    price_message += f"{exchange.upper()} Spot: Not available{token_availability_info if exchange == 'gate' else ''}\n"
+                    price_message += f"Spot: Not available\n"
                 
+                # Add futures price
                 if prices[exchange].get('futures'):
-                    price_message += f"<a href='{futures_url}'>{exchange.upper()} Futures</a>: ${prices[exchange]['futures']:.4f}\n"
+                    price_message += f"<a href='{futures_url}'>Futures</a>: ${format_price(prices[exchange]['futures'])}\n"
                 else:
-                    price_message += f"{exchange.upper()} Futures: Not available\n"
+                    price_message += f"Futures: Not available\n"
                 
                 price_message += "\n"  # Add spacing between exchanges
         
@@ -893,11 +918,12 @@ class ArbitragePriceMonitor:
                     dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
                 
                 alert_msg += (
-                    f"Type: DEX to CEX Spot\n"
-                    f"Buy on: {dex_name} at ${opp['dex_price']:.4f}\n"
-                    f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${opp['cex_price']:.4f}\n"
-                    f"Price difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${opp['spread']:.4f}\n"
+                    f"💰 <b>Arbitrage Opportunity</b>\n"
+                    f"Type: DEX -> CEX Spot\n"
+                    f"Buy on: {dex_name} at ${format_price(opp['dex_price'])}\n"
+                    f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${format_price(opp['cex_price'])}\n"
+                    f"Difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
                 )
             
             # CEX to DEX Spot
@@ -910,11 +936,12 @@ class ArbitragePriceMonitor:
                     dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
                 
                 alert_msg += (
-                    f"Type: CEX to DEX Spot\n"
-                    f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${opp['cex_price']:.4f}\n"
-                    f"Sell on: {dex_name} at ${opp['dex_price']:.4f}\n"
-                    f"Price difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${opp['spread']:.4f}\n"
+                    f"💰 <b>Arbitrage Opportunity</b>\n"
+                    f"Type: CEX Spot -> DEX\n"
+                    f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${format_price(opp['cex_price'])}\n"
+                    f"Sell on: {dex_name} at ${format_price(opp['dex_price'])}\n"
+                    f"Difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
                 )
             
             # DEX to CEX Futures
@@ -927,11 +954,12 @@ class ArbitragePriceMonitor:
                     dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
                 
                 alert_msg += (
-                    f"Type: DEX to CEX Futures\n"
-                    f"Buy on: {dex_name} at ${opp['dex_price']:.4f}\n"
-                    f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${opp['cex_price']:.4f}\n"
-                    f"Price difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${opp['spread']:.4f}\n"
+                    f"💰 <b>Arbitrage Opportunity</b>\n"
+                    f"Type: DEX -> CEX Futures\n"
+                    f"Buy on: {dex_name} at ${format_price(opp['dex_price'])}\n"
+                    f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${format_price(opp['cex_price'])}\n"
+                    f"Difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
                 )
             
             # CEX to DEX Futures
@@ -944,11 +972,12 @@ class ArbitragePriceMonitor:
                     dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
                 
                 alert_msg += (
-                    f"Type: CEX to DEX Futures\n"
-                    f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${opp['cex_price']:.4f}\n"
-                    f"Sell on: {dex_name} at ${opp['dex_price']:.4f}\n"
-                    f"Price difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${opp['spread']:.4f}\n"
+                    f"💰 <b>Arbitrage Opportunity</b>\n"
+                    f"Type: CEX Futures -> DEX\n"
+                    f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${format_price(opp['cex_price'])}\n"
+                    f"Sell on: {dex_name} at ${format_price(opp['dex_price'])}\n"
+                    f"Difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
                 )
             
             # CEX to CEX Spot
@@ -956,11 +985,12 @@ class ArbitragePriceMonitor:
                 exchange1_url = self._get_exchange_url(opp['exchange1'], 'spot', token_symbol)
                 exchange2_url = self._get_exchange_url(opp['exchange2'], 'spot', token_symbol)
                 alert_msg += (
-                    f"Type: CEX to CEX Spot\n"
-                    f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${opp['price1']:.4f}\n"
-                    f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${opp['price2']:.4f}\n"
-                    f"Price difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${opp['spread']:.4f}\n"
+                    f"💰 <b>Arbitrage Opportunity</b>\n"
+                    f"Type: CEX Spot -> CEX Spot\n"
+                    f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${format_price(opp['price1'])}\n"
+                    f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${format_price(opp['price2'])}\n"
+                    f"Difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
                 )
             
             # CEX to CEX Futures
@@ -968,11 +998,12 @@ class ArbitragePriceMonitor:
                 exchange1_url = self._get_exchange_url(opp['exchange1'], 'futures', token_symbol)
                 exchange2_url = self._get_exchange_url(opp['exchange2'], 'futures', token_symbol)
                 alert_msg += (
-                    f"Type: CEX to CEX Futures\n"
-                    f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${opp['price1']:.4f}\n"
-                    f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${opp['price2']:.4f}\n"
-                    f"Price difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${opp['spread']:.4f}\n"
+                    f"💰 <b>Arbitrage Opportunity</b>\n"
+                    f"Type: CEX Futures -> CEX Futures\n"
+                    f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${format_price(opp['price1'])}\n"
+                    f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${format_price(opp['price2'])}\n"
+                    f"Difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
                 )
             
             # CEX Spot to CEX Futures (Cross-exchange)
@@ -980,11 +1011,12 @@ class ArbitragePriceMonitor:
                 spot_url = self._get_exchange_url(opp['spot_exchange'], 'spot', token_symbol)
                 futures_url = self._get_exchange_url(opp['futures_exchange'], 'futures', token_symbol)
                 alert_msg += (
-                    f"Type: CEX Spot to CEX Futures\n"
-                    f"Buy on: <a href='{spot_url}'>{opp['spot_exchange'].upper()}</a> (Spot) at ${opp['spot_price']:.4f}\n"
-                    f"Sell on: <a href='{futures_url}'>{opp['futures_exchange'].upper()}</a> (Futures) at ${opp['futures_price']:.4f}\n"
-                    f"Price difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${opp['spread']:.4f}\n"
+                    f"💰 <b>Arbitrage Opportunity</b>\n"
+                    f"Type: CEX Spot -> CEX Futures\n"
+                    f"Buy on: <a href='{spot_url}'>{opp['spot_exchange'].upper()}</a> (Spot) at ${format_price(opp['spot_price'])}\n"
+                    f"Sell on: <a href='{futures_url}'>{opp['futures_exchange'].upper()}</a> (Futures) at ${format_price(opp['futures_price'])}\n"
+                    f"Difference: {opp['percentage']:.2f}%\n"
+                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
                 )
             else:
                 logger.warning(f"Invalid or incomplete opportunity data: {opp}")

@@ -38,7 +38,17 @@ class GateClient:
         if price is None:
             return f"No market price found for {symbol}"
         
-        return f"Market price for {symbol}: {price} USDT" 
+        # Dynamic price formatting based on magnitude
+        if price < 0.0001:
+            formatted_price = f"{price:.8f}"
+        elif price < 0.01:
+            formatted_price = f"{price:.6f}"
+        elif price < 1:
+            formatted_price = f"{price:.5f}"
+        else:
+            formatted_price = f"{price:.4f}"
+            
+        return f"Market price for {symbol}: {formatted_price} USDT" 
 
     def _get_headers(self) -> Dict[str, str]:
         return {

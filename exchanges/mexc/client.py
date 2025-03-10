@@ -124,30 +124,58 @@ class MexcClient(BaseAPIClient):
 
     async def get_futures_price(self, symbol: str) -> float:
         """
-        Get futures index price for a symbol.
+        Get futures price for a symbol.
         
         Args:
             symbol: Trading pair symbol (e.g. 'BTCUSDT')
             
         Returns:
-            float: Current index price of the symbol
+            float: Current price of the symbol
         """
         await self.ensure_session()
         
         try:
-            # Get index price
-            index_url = f"https://contract.mexc.com/api/v1/contract/index_price/{symbol.replace('USDT', '')}_USDT"
-            async with self.session.get(index_url) as response:
+            # Format symbol for futures API (e.g., BTCUSDT -> BTC_USDT)
+            formatted_symbol = f"{symbol.replace('USDT', '')}_USDT"
+            
+            # Use the contract/ticker endpoint
+            ticker_url = "https://contract.mexc.com/api/v1/contract/ticker"
+            async with self.session.get(ticker_url) as response:
                 if response.status != 200:
                     logger.error(f"MEXC API error: {await response.text()}")
                     return None
-                index_data = await response.json()
                 
-                if not index_data.get('success'):
-                    logger.error(f"Failed to get index price: {index_data}")
+                ticker_data = await response.json()
+                logger.info(f"MEXC futures ticker data structure: {type(ticker_data)}")
+                
+                if not ticker_data.get('success', False):
+                    logger.error(f"Failed to get futures ticker data: {ticker_data}")
                     return None
+                
+                # The data field contains the ticker information
+                if "data" in ticker_data:
+                    data = ticker_data["data"]
                     
-                return float(index_data["data"]["indexPrice"]) if "data" in index_data else None
+                    # Check if data is a list or a single object
+                    if isinstance(data, list):
+                        # Find the matching symbol in the list
+                        for ticker in data:
+                            if ticker.get("symbol") == formatted_symbol:
+                                return float(ticker.get("lastPrice", 0))
+                        
+                        # If we reach here, we didn't find the symbol
+                        logger.error(f"Symbol {formatted_symbol} not found in futures ticker data")
+                        return None
+                    elif isinstance(data, dict):
+                        # If it's a single object (maybe when querying a specific symbol)
+                        if data.get("symbol") == formatted_symbol or "symbol" not in data:
+                            return float(data.get("lastPrice", 0))
+                        else:
+                            logger.error(f"Symbol mismatch in futures ticker data. Expected {formatted_symbol}, got {data.get('symbol')}")
+                            return None
+                
+                logger.error(f"Unexpected response structure from MEXC futures ticker: {ticker_data}")
+                return None
         except Exception as e:
             logger.error(f"Error fetching futures price: {str(e)}")
             return None
