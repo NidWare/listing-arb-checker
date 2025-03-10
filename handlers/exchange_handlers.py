@@ -546,7 +546,7 @@ class ArbitragePriceMonitor:
                 await self._process_arbitrage_opportunities(prices)
             
             # Wait before next check
-            await asyncio.sleep(3)
+            await asyncio.sleep(10)
     
     async def _fetch_dex_prices(self) -> Dict[str, Dict[str, Any]]:
         """Fetch prices from DEX platforms"""
