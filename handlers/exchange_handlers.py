@@ -517,7 +517,7 @@ class ArbitragePriceMonitor:
             )
             
             # Format and send price message
-            price_message = self._format_price_message(prices)
+            price_message = await self._format_price_message(prices)
             await self._send_message(price_message)
             
             # Process arbitrage opportunities if we have prices
@@ -664,7 +664,7 @@ class ArbitragePriceMonitor:
         
         return cex_prices
     
-    def _format_price_message(self, prices: Dict[str, Dict[str, Any]]) -> str:
+    async def _format_price_message(self, prices: Dict[str, Dict[str, Any]]) -> str:
         """Format the price message to display to users"""
         token_symbol = self.query.upper()
         price_message = f"📊 Current prices for {token_symbol}:\n\n"
@@ -685,10 +685,26 @@ class ArbitragePriceMonitor:
                 spot_url = self._get_exchange_url(exchange, 'spot', token_symbol)
                 futures_url = self._get_exchange_url(exchange, 'futures', token_symbol)
                 
+                # Get token availability status for Gate.io
+                token_availability_info = ""
+                if exchange == "gate":
+                    try:
+                        # Get token availability from Gate.io
+                        gate_client = exchange_service._get_exchange_client("gate")
+                        availability = await gate_client.check_token_availability(self.query)
+                        
+                        # Create status indicators for deposit and withdrawal
+                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
+                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
+                        
+                        token_availability_info = f"\n<b>Gate.io Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}"
+                    except Exception as e:
+                        logger.error(f"Error getting token availability for {self.query} on Gate.io: {str(e)}")
+                
                 if prices[exchange].get('spot'):
-                    price_message += f"<a href='{spot_url}'>{exchange.upper()} Spot</a>: ${prices[exchange]['spot']:.4f}\n"
+                    price_message += f"<a href='{spot_url}'>{exchange.upper()} Spot</a>: ${prices[exchange]['spot']:.4f}{token_availability_info if exchange == 'gate' else ''}\n"
                 else:
-                    price_message += f"{exchange.upper()} Spot: Not available\n"
+                    price_message += f"{exchange.upper()} Spot: Not available{token_availability_info if exchange == 'gate' else ''}\n"
                 
                 if prices[exchange].get('futures'):
                     price_message += f"<a href='{futures_url}'>{exchange.upper()} Futures</a>: ${prices[exchange]['futures']:.4f}\n"
