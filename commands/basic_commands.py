@@ -20,25 +20,12 @@ async def cmd_start(message: Message):
             "🔍 Multi-Coin Monitoring:\n"
             "/addcoin [coin] - Add a new coin to monitor\n"
             "/listcoins - Show all monitored coins\n"
-            "/stop [id] - Stop monitoring a specific coin\n"
+            "/stop [code] - Stop monitoring a specific coin\n"
             "/stop_monitor - Stop all monitoring\n"
-            "/setmin [id] [percentage] - Set minimum arbitrage %\n"
+            "/setmin [code] [percentage] - Set minimum arbitrage %\n"
         )
     else:
         await message.answer("⚠️ You don't have permission to use this bot.")
-
-@basic_router.message(Command("status"))
-async def cmd_status(message: Message):
-    if message.from_user.id in ConfigManager.get_admin_user_ids():
-        # Add your status check logic here
-        await message.answer(
-            "🟢 System Status:\n\n"
-            "- Admin Bot: Online\n"
-            "- Main Bot: Online\n"
-            "- Exchange Service: Active"
-        )
-    else:
-        await message.answer("⚠️ You don't have permission to use this command.")
 
 @basic_router.message(Command("stats"))
 async def cmd_stats(message: Message):

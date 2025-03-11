@@ -349,7 +349,8 @@ async def handle_min_percentage(message: Message):
                 f"✅ Monitoring started for {coin} (Monitor ID: {query_id[:8]})!\n\n"
                 f"Filter mode: {filter_mode_text}{dex_info}\n"
                 f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
-                "Use /stop command with ID to stop specific monitoring or /stop_monitor to stop all."
+                "Use /stop command with ID to stop specific monitoring or /stop_monitor to stop all.",
+                parse_mode=None
             )
             
         except ImportError:
@@ -365,7 +366,8 @@ async def handle_min_percentage(message: Message):
                 f"✅ Monitoring started for {coin}!\n\n"
                 f"Filter mode: {filter_mode_text}{dex_info}\n"
                 f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
-                "Use /stop_monitor command to stop monitoring."
+                "Use /stop_monitor command to stop monitoring.",
+                parse_mode=None
             )
 
     except Exception as e:
@@ -386,7 +388,7 @@ async def cmd_stop(message: Message):
     monitor_id = args[1] if len(args) > 1 else None
     
     if not monitor_id:
-        await message.answer("⚠️ Please specify a monitor ID.\nExample: /stop abc123\nUse /listcoins to see available monitors.")
+        await message.answer("⚠️ Please specify a monitor ID.\nExample: /stop abc123\nUse /listcoins to see available monitors.", parse_mode=None)
         return
     
     # Try to find the monitor in the handler implementation
@@ -407,7 +409,7 @@ async def cmd_stop(message: Message):
                     if not handler_active_monitors[chat_id]:
                         del handler_active_monitors[chat_id]
                     
-                    await message.answer(f"✅ Stopped monitoring for Monitor ID: {query_id[:8]}")
+                    await message.answer(f"✅ Stopped monitoring for Monitor ID: {query_id[:8]}", parse_mode=None)
                     
                     # Also notify the alert group
                     alert_group_id = ConfigManager.get_alert_group_id()
@@ -418,7 +420,7 @@ async def cmd_stop(message: Message):
                         chat_id=alert_group_id,
                         text=f"✅ Monitoring stopped for Monitor ID: {query_id[:8]}",
                         message_thread_id=topic_id,
-                        parse_mode="HTML",
+                        parse_mode=None,
                         disable_web_page_preview=True
                     )
                     
@@ -427,7 +429,7 @@ async def cmd_stop(message: Message):
         
         if not found:
             # If we're here, we couldn't find the monitor in the handler implementation
-            await message.answer(f"❌ No monitor found with ID: {monitor_id}")
+            await message.answer(f"❌ No monitor found with ID: {monitor_id}", parse_mode=None)
             # List available monitors to help the user
             await cmd_list_coins(message)
     
@@ -641,9 +643,9 @@ async def cmd_list_coins(message: Message):
         message_text += "Handler Bot Monitors:\n"
         message_text += "\n\n".join(handler_monitors)
         
-    message_text += "\n\nCommands:\n• /stop <ID> - Stop a specific monitor\n• /stop_monitor - Stop all monitoring\n• /setmin <ID> <percentage> - Set minimum %"
+    message_text += "\n\nCommands:\n• /stop <code> - Stop a specific monitor\n• /stop_monitor - Stop all monitoring\n• /setmin <code> <percentage> - Set minimum %"
     
-    await message.answer(message_text)
+    await message.answer(message_text, parse_mode=None)
 
 @monitor_router.message(Command("setmin"))
 async def cmd_set_min_percentage(message: Message):
@@ -656,7 +658,7 @@ async def cmd_set_min_percentage(message: Message):
     # Parse arguments: /setmin <monitor_id> <percentage>
     args = message.text.split()
     if len(args) < 3:
-        await message.answer("⚠️ Please specify a monitor ID and percentage.\nExample: /setmin abc123 0.5")
+        await message.answer("⚠️ Please specify a monitor ID and percentage.\nExample: /setmin abc123 0.5", parse_mode=None)
         return
     
     monitor_id = args[1]
@@ -704,7 +706,7 @@ async def cmd_set_min_percentage(message: Message):
                 # For now, just notify that we can't set min percentage for the admin bot implementation
                 await message.answer("⚠️ Setmin is only supported for multi-coin monitors. Use /stop_monitor and /monitor again to set a new percentage.")
             else:
-                await message.answer(f"❌ No monitor found with ID: {monitor_id}")
+                await message.answer(f"❌ No monitor found with ID: {monitor_id}", parse_mode=None)
                 # List available monitors to help the user
                 await cmd_list_coins(message)
     
