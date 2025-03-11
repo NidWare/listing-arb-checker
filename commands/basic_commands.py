@@ -16,9 +16,13 @@ async def cmd_start(message: Message):
             "Welcome to the Admin Bot! 🛡\n\n"
             "Available commands:\n"
             "/status - Check system status\n"
-            "/stats - View monitoring statistics\n"
-            "/monitor [coin] - Start monitoring a coin\n"
-            "/stop_monitor - Stop monitoring"
+            "/stats - View monitoring statistics\n\n"
+            "🔍 Multi-Coin Monitoring:\n"
+            "/addcoin [coin] - Add a new coin to monitor\n"
+            "/listcoins - Show all monitored coins\n"
+            "/stop [id] - Stop monitoring a specific coin\n"
+            "/stop_monitor - Stop all monitoring\n"
+            "/setmin [id] [percentage] - Set minimum arbitrage %\n"
         )
     else:
         await message.answer("⚠️ You don't have permission to use this bot.")
@@ -39,13 +43,28 @@ async def cmd_status(message: Message):
 @basic_router.message(Command("stats"))
 async def cmd_stats(message: Message):
     if message.from_user.id in ConfigManager.get_admin_user_ids():
-        from commands.monitor_commands import active_monitors
-        # Add your statistics gathering logic here
+        from commands.monitor_commands import active_monitors as cmd_monitors
+        from handlers.exchange_handlers import active_monitors as handler_monitors
+        
+        # Count total monitors from both implementations
+        total_monitors = 0
+        
+        # Count monitors from handler implementation (multiple coins per user)
+        handler_coin_count = 0
+        for user_monitors in handler_monitors.values():
+            handler_coin_count += len(user_monitors)
+            
+        # Count monitors from command implementation
+        cmd_coin_count = len(cmd_monitors)
+        
+        total_monitors = handler_coin_count + cmd_coin_count
+        
         await message.answer(
             "📊 System Statistics:\n\n"
-            f"- Active Monitors: {len(active_monitors)}\n"
-            "- Total Requests: 0\n"
-            "- Uptime: 0h 0m"
+            f"- Active Monitors: {total_monitors} total\n"
+            f"  • Handler Implementation: {handler_coin_count} coins\n"
+            f"  • Command Implementation: {cmd_coin_count} coins\n"
+            "- Uptime: Active"
         )
     else:
         await message.answer("⚠️ You don't have permission to use this command.")

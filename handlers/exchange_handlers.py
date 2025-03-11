@@ -7,9 +7,14 @@ from services.exchange_service import ExchangeService
 import logging
 from typing import Dict, Optional, Any, List, Set
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from dex.dex_tools import DexTools
 import os
+import re
+import json
+import aiohttp
+import time
+import uuid  # Add import for UUID generation
 
 # Global constants
 PRICE_CHECK_INTERVAL = 60  # seconds
@@ -37,13 +42,18 @@ def format_price(price: float) -> str:
         return f"{price:.4f}"
 
 # Track active monitoring tasks
-active_monitors = {}
+active_monitors = {}  # Format: {chat_id: {query_id: task}}
 
 # Store temporary user queries while waiting for min percentage input
-user_queries = {}
+user_queries = {}  # Format: {chat_id: {query_id: {query: str, min_percentage: float, filter_mode: str}}}
 
 # Store user filter preferences
 user_filter_preferences = {}  # Format: {chat_id: "cex_only" or "all"}
+
+# Function to generate a unique ID for each query
+def generate_query_id() -> str:
+    """Generate a unique ID for a monitoring query"""
+    return str(uuid.uuid4())
 
 # Create a router instance
 router = Router()
@@ -75,7 +85,8 @@ async def on_bot_status_changed(event: ChatMemberUpdated):
     elif (event.old_chat_member.status == ChatMemberStatus.ADMINISTRATOR and 
           event.new_chat_member.status != ChatMemberStatus.ADMINISTRATOR):
         if chat_id in active_monitors:
-            active_monitors[chat_id].cancel()
+            for query_id, task in active_monitors[chat_id].items():
+                task.cancel()
             del active_monitors[chat_id]
 
 @router.message(Command("start"))
@@ -84,7 +95,10 @@ async def cmd_start(message: Message):
     if message.chat.type != "private":
         return
         
-    await message.answer(
+    user_id = message.from_user.id
+    is_user_admin = is_admin(user_id)
+    
+    base_message = (
         "Welcome to Crypto Exchange Info Bot! 🚀\n\n"
         "Send me a coin name to get:\n"
         "• Prices across all exchanges\n"
@@ -92,6 +106,19 @@ async def cmd_start(message: Message):
         "• Transfer possibilities\n\n"
         "Example: 'BTC' or 'ETH'"
     )
+    
+    if is_user_admin:
+        admin_commands = (
+            "\n\n📊 Admin Commands:\n"
+            "• /addcoin <symbol> - Start monitoring a new coin\n"
+            "• /listcoins - List all monitored coins\n"
+            "• /stop [id] - Stop all monitoring or a specific one\n"
+            "• /setmin <id> <percentage> - Set min arbitrage %\n"
+            "\nYou can monitor multiple coins simultaneously!"
+        )
+        await message.answer(base_message + admin_commands)
+    else:
+        await message.answer(base_message)
 
 @router.message(Command("chatinfo"))
 async def cmd_chat_info(message: Message):
@@ -462,38 +489,39 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
     result.append("</pre>")
     return "\n".join(result)
 
-async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0.1, network: str = None, pool_address: str = None):
+async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0.1, network: str = None, pool_address: str = None, query_id: str = None):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
         # Get the filter preference for this chat_id
         filter_mode = user_filter_preferences.get(chat_id, "all")  # Default to showing all
-        logger.info(f"Starting monitoring for {query} with filter mode: {filter_mode} (raw value from dict)")
+        logger.info(f"Starting monitoring for {query} (ID: {query_id}) with filter mode: {filter_mode} (raw value from dict)")
         
         # Validate the filter mode
         if filter_mode not in ["cex_only", "cex_dex_only", "future", "all"]:
             logger.warning(f"Invalid filter mode: {filter_mode}. Defaulting to 'all'")
             filter_mode = "all"
             
-        logger.info(f"Using filter mode: {filter_mode} for {query}")
+        logger.info(f"Using filter mode: {filter_mode} for {query} (ID: {query_id})")
         
-        price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage, filter_mode, network, pool_address)
+        price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage, filter_mode, network, pool_address, query_id)
         await price_monitor.start_monitoring()
     except asyncio.CancelledError:
-        logger.info(f"Monitoring stopped for {query}")
+        logger.info(f"Monitoring stopped for {query} (ID: {query_id})")
     except Exception as e:
         logger.error(f"Error in price monitoring: {str(e)}")
         alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
         topic_id = int(os.getenv("TOPIC_ID", "1"))
-        await bot.send_message(alert_group_id, f"❌ Error in price monitoring: {str(e)}", message_thread_id=topic_id, parse_mode="HTML", disable_web_page_preview=True)
+        await bot.send_message(alert_group_id, f"❌ Error in price monitoring for {query} (ID: {query_id}): {str(e)}", message_thread_id=topic_id, parse_mode="HTML", disable_web_page_preview=True)
 
 class ArbitragePriceMonitor:
     """Class for monitoring prices and detecting arbitrage opportunities"""
     
     def __init__(self, query: str, bot, min_arbitrage_percentage: float = 0.1, filter_mode: str = "all", 
-                 network: str = None, pool_address: str = None):
+                 network: str = None, pool_address: str = None, query_id: str = None):
         self.query = query
         self.bot = bot
         self.min_arbitrage_percentage = min_arbitrage_percentage
+        self.query_id = query_id or generate_query_id()  # Use provided ID or generate a new one
         # Make sure filter_mode is either "cex_only", "cex_dex_only", "future" or "all"
         if filter_mode not in ["cex_only", "cex_dex_only", "future", "all"]:
             logger.warning(f"Invalid filter_mode provided: {filter_mode}, defaulting to 'all'")
@@ -1032,9 +1060,12 @@ class ArbitragePriceMonitor:
     async def _send_message(self, message: str):
         """Send a message to the alert group"""
         if message and len(message.strip()) > 0:
+            # Add query ID as a small reference at the end of the message
+            prefixed_message = f"{message}\n<i>Monitor ID: {self.query_id[:8]}</i>"
+            
             await self.bot.send_message(
                 self.alert_group_id, 
-                message, 
+                prefixed_message, 
                 message_thread_id=self.topic_id,
                 parse_mode="HTML",
                 disable_web_page_preview=True
@@ -1055,15 +1086,57 @@ async def cmd_stop(message: Message):
         if message.chat.type == "private":
             await message.answer("❌ Only admins can stop monitoring")
         return
+    
+    # Parse arguments: /stop [monitor_id]
+    args = message.text.split()
+    monitor_id = args[1] if len(args) > 1 else None
+    
+    if chat_id not in active_monitors or not active_monitors[chat_id]:
+        await message.answer("❌ No active monitors to stop")
+        return
         
-    if chat_id in active_monitors:
-        active_monitors[chat_id].cancel()
-        del active_monitors[chat_id]
-        # Send confirmation to both alert group and admin
-        await bot.send_message(alert_group_id, "✅ Monitoring stopped", message_thread_id=topic_id, parse_mode="HTML", disable_web_page_preview=True)
-        await message.answer("✅ Monitoring stopped in the alert group")
+    if monitor_id:
+        # Stop specific monitor
+        found = False
+        for query_id, task in list(active_monitors[chat_id].items()):
+            if query_id.startswith(monitor_id):
+                task.cancel()
+                del active_monitors[chat_id][query_id]
+                found = True
+                # Send confirmation to both alert group and admin
+                await bot.send_message(
+                    alert_group_id, 
+                    f"✅ Monitoring stopped for ID: {query_id[:8]}", 
+                    message_thread_id=topic_id, 
+                    parse_mode="HTML", 
+                    disable_web_page_preview=True
+                )
+                await message.answer(f"✅ Stopped monitoring for ID: {query_id[:8]}")
+                break
+        
+        if not found:
+            await message.answer(f"❌ No monitor found with ID: {monitor_id}")
+            
+        # If no more monitors, clean up the dict
+        if not active_monitors[chat_id]:
+            del active_monitors[chat_id]
     else:
-        await message.answer("❌ No active monitoring found")
+        # Stop all monitors
+        for query_id, task in list(active_monitors[chat_id].items()):
+            task.cancel()
+        
+        num_stopped = len(active_monitors[chat_id])
+        del active_monitors[chat_id]
+        
+        # Send confirmation to both alert group and admin
+        await bot.send_message(
+            alert_group_id, 
+            f"✅ All monitoring stopped ({num_stopped} monitors)", 
+            message_thread_id=topic_id, 
+            parse_mode="HTML", 
+            disable_web_page_preview=True
+        )
+        await message.answer(f"✅ All monitoring stopped ({num_stopped} monitors)")
 
 @router.message()
 async def handle_search(message: Message):
@@ -1089,13 +1162,25 @@ async def handle_search(message: Message):
         await message.answer("Please send a valid coin name")
         return
 
-    # Store the query information
-    user_queries[chat_id] = query
+    # Generate a unique ID for this monitoring request
+    query_id = generate_query_id()
     
-    # Ask for filter mode first
-    logger.info(f"Showing filter keyboard to user {user_id}")
+    # Initialize user_queries for this chat if not exists
+    if chat_id not in user_queries:
+        user_queries[chat_id] = {}
+    
+    # Store the query information
+    user_queries[chat_id][query_id] = {
+        'query': query, 
+        'min_percentage': MIN_ARBITRAGE_PERCENTAGE, 
+        'filter_mode': "all",
+        'query_id': query_id
+    }
+    
+    # Ask for filter mode
+    logger.info(f"Showing filter keyboard to user {user_id} for coin {query}")
     await message.answer(
-        "Please select which opportunities to monitor:",
+        f"Please select which opportunities to monitor for {query}:",
         reply_markup=get_filter_mode_keyboard()
     )
     return
@@ -1109,10 +1194,11 @@ async def handle_min_percentage(message: Message):
     bot = message.bot
     
     # Get the stored query
-    query = user_queries.pop(chat_id)
+    query_id = next(iter(user_queries[chat_id]))
+    query_info = user_queries[chat_id].pop(query_id)
     
     # Get the user's filter preference (default to "all" if not set)
-    filter_mode = user_filter_preferences.get(chat_id, "all")
+    filter_mode = query_info.get('filter_mode', "all")
     
     # Parse the minimum percentage
     try:
@@ -1127,36 +1213,37 @@ async def handle_min_percentage(message: Message):
     try:
         # Cancel existing monitoring task if any
         if chat_id in active_monitors:
-            active_monitors[chat_id].cancel()
+            for query_id, task in active_monitors[chat_id].items():
+                task.cancel()
             del active_monitors[chat_id]
         
         # Get filter mode text for display
         if filter_mode == "cex_only":
-            mode_text = "CEX-CEX Only (no DEX)"
+            mode_text = "CEX-CEX Only"
         elif filter_mode == "cex_dex_only":
-            mode_text = "ONLY CEX-DEX"
+            mode_text = "CEX-DEX Only"
         elif filter_mode == "future":
-            mode_text = "DEX + CEX (ONLY FUTURE)"
+            mode_text = "Future Only"
         else:
-            mode_text = "CEX-CEX + DEX"
+            mode_text = "All Types"
         
         # Send initial message to alert group
         await bot.send_message(
             chat_id=alert_group_id,
-            text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...\nFilter mode: {mode_text}",
+            text=f"🔍 Starting price monitoring for {query_info['query']} with minimum arbitrage of {min_percentage}%...\nFilter mode: {mode_text}",
             message_thread_id=topic_id,
             parse_mode="HTML",
             disable_web_page_preview=True
         )
         
         # Start new monitoring task with the target chat ID, bot instance, minimum percentage, and filter mode
-        task = asyncio.create_task(monitor_prices(chat_id, query, bot, min_percentage))
-        active_monitors[chat_id] = task
+        task = asyncio.create_task(monitor_prices(chat_id, query_info['query'], bot, min_percentage, query_info.get('network'), query_info.get('pool_address'), query_id))
+        active_monitors[chat_id] = {query_id: task}
         
         # Send confirmation to both alert group and admin
         await bot.send_message(
             chat_id=alert_group_id,
-            text=f"✅ Monitoring started for {query}!\n\n"
+            text=f"✅ Monitoring started for {query_info['query']}!\n\n"
                  f"Filter mode: {mode_text}\n"
                  f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
                  "Use /stop command to stop monitoring.",
@@ -1165,7 +1252,7 @@ async def handle_min_percentage(message: Message):
             disable_web_page_preview=True
         )
         
-        await message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%\nFilter mode: {mode_text}")
+        await message.answer(f"✅ Started monitoring {query_info['query']} with minimum arbitrage set to {min_percentage}%\nFilter mode: {mode_text}")
     except Exception as e:
         await message.answer(f"❌ Error starting monitoring: {str(e)}")
 
@@ -1202,8 +1289,6 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     filter_mode = callback.data.split("_")[1]
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id
-    query = user_queries.get(chat_id, {}).get('query', '')
-    min_percentage = user_queries.get(chat_id, {}).get('min_percentage', MIN_ARBITRAGE_PERCENTAGE)
     alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
     topic_id = int(os.getenv("TOPIC_ID", "0"))  # Get topic ID from env
     bot = callback.bot
@@ -1213,52 +1298,278 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
         await callback.answer("❌ Only admins can start monitoring")
         return
     
+    # Find the most recent query in user_queries for this chat
+    if chat_id not in user_queries or not user_queries[chat_id]:
+        await callback.answer("❌ No pending coin to monitor. Use /addcoin to add a coin.")
+        return
+    
+    # Get the most recent query_id added (assuming it's the one the user is configuring)
+    query_id = list(user_queries[chat_id].keys())[-1]
+    query_info = user_queries[chat_id][query_id]
+    
     # Update filter mode in user_queries
-    if chat_id in user_queries:
-        user_queries[chat_id]['filter_mode'] = filter_mode
+    query_info['filter_mode'] = filter_mode
     
     try:
-        if chat_id in active_monitors:
-            active_monitors[chat_id].cancel()
-            del active_monitors[chat_id]
-        
         # Translate filter mode for display
         if filter_mode == "dex_only":
-            mode_text = "DEX Only (no CEX)"
+            mode_text = "DEX Only"
         elif filter_mode == "cex_only":
-            mode_text = "CEX-CEX Only (no DEX)"
+            mode_text = "CEX-CEX Only"
         elif filter_mode == "cex_dex_only":
-            mode_text = "ONLY CEX-DEX"
+            mode_text = "CEX-DEX Only"
         elif filter_mode == "future":
-            mode_text = "DEX + CEX (ONLY FUTURE)"
+            mode_text = "Future Only"
         else:
-            mode_text = "CEX-CEX + DEX"
+            mode_text = "All Types"
         
         # Send initial message to alert group
         await bot.send_message(
             chat_id=alert_group_id,
-            text=f"🔍 Starting price monitoring for {query} with minimum arbitrage of {min_percentage}%...\nFilter mode: {mode_text}",
+            text=f"🔍 Starting price monitoring for {query_info['query']} (ID: {query_id[:8]}) with minimum arbitrage of {query_info['min_percentage']}%...\nFilter mode: {mode_text}",
             message_thread_id=topic_id,
             parse_mode="HTML",
             disable_web_page_preview=True
         )
         
-        # Start new monitoring task with the target chat ID, bot instance, minimum percentage, and filter mode
-        task = asyncio.create_task(monitor_prices(chat_id, query, bot, min_percentage))
-        active_monitors[chat_id] = task
+        # Start new monitoring task
+        task = asyncio.create_task(
+            monitor_prices(
+                chat_id, 
+                query_info['query'], 
+                bot, 
+                query_info['min_percentage'], 
+                query_info.get('network'), 
+                query_info.get('pool_address'), 
+                query_id
+            )
+        )
+        
+        # Initialize active_monitors for this chat if not exists
+        if chat_id not in active_monitors:
+            active_monitors[chat_id] = {}
+            
+        # Add the new monitor to the active monitors
+        active_monitors[chat_id][query_id] = task
         
         # Send confirmation to both alert group and admin
         await bot.send_message(
             chat_id=alert_group_id,
-            text=f"✅ Monitoring started for {query}!\n\n"
+            text=f"✅ Monitoring started for {query_info['query']} (ID: {query_id[:8]})!\n\n"
                  f"Filter mode: {mode_text}\n"
-                 f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
+                 f"I will notify you when there are arbitrage opportunities with >{query_info['min_percentage']}% difference.\n"
                  "Use /stop command to stop monitoring.",
             message_thread_id=topic_id,
             parse_mode="HTML",
             disable_web_page_preview=True
         )
         
-        await callback.message.answer(f"✅ Started monitoring {query} with minimum arbitrage set to {min_percentage}%\nFilter mode: {mode_text}")
+        await callback.message.answer(f"✅ Started monitoring {query_info['query']} (ID: {query_id[:8]}) with minimum arbitrage set to {query_info['min_percentage']}%\nFilter mode: {mode_text}")
     except Exception as e:
-        await callback.answer(f"❌ Error starting monitoring: {str(e)}") 
+        await callback.answer(f"❌ Error starting monitoring: {str(e)}")
+
+@router.message(Command("addcoin"))
+async def cmd_add_coin(message: Message):
+    """Add a new coin to monitor"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Check if user is admin and message is in private chat
+    if not is_admin(user_id) or message.chat.type != "private":
+        # Only respond in private chats
+        if message.chat.type == "private":
+            await message.answer("❌ Only admins can add coins to monitor")
+        return
+    
+    # Parse coin symbol from command
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("⚠️ Please specify a coin to monitor.\nExample: /addcoin BTC")
+        return
+    
+    # Get the coin symbol from the command
+    query = args[1].strip().upper()
+    
+    if not query:
+        await message.answer("Please send a valid coin name")
+        return
+
+    # Generate a unique ID for this monitoring request
+    query_id = generate_query_id()
+    
+    # Initialize user_queries for this chat if not exists
+    if chat_id not in user_queries:
+        user_queries[chat_id] = {}
+    
+    # Store the query information
+    user_queries[chat_id][query_id] = {
+        'query': query, 
+        'min_percentage': MIN_ARBITRAGE_PERCENTAGE, 
+        'filter_mode': "all",
+        'query_id': query_id
+    }
+    
+    # Ask for filter mode
+    logger.info(f"Showing filter keyboard to user {user_id} for coin {query}")
+    await message.answer(
+        f"Please select which opportunities to monitor for {query}:",
+        reply_markup=get_filter_mode_keyboard()
+    )
+    return
+
+@router.message(Command("listcoins"))
+async def cmd_list_coins(message: Message):
+    """List all coins being monitored"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Check if user is admin and message is in private chat
+    if not is_admin(user_id) or message.chat.type != "private":
+        # Only respond in private chats
+        if message.chat.type == "private":
+            await message.answer("❌ Only admins can view monitored coins")
+        return
+    
+    if chat_id not in active_monitors or not active_monitors[chat_id]:
+        await message.answer("⚠️ No coins are currently being monitored")
+        return
+    
+    # Collect information about active monitors
+    monitors_info = []
+    coin_count = len(active_monitors[chat_id])
+    
+    for query_id, _ in active_monitors[chat_id].items():
+        # Find the associated query information if available
+        query_info = "Unknown"
+        filter_mode = "all"
+        min_percentage = MIN_ARBITRAGE_PERCENTAGE
+        
+        for chat_data in user_queries.values():
+            if query_id in chat_data:
+                query_info = chat_data[query_id].get('query', 'Unknown')
+                filter_mode = chat_data[query_id].get('filter_mode', 'all')
+                min_percentage = chat_data[query_id].get('min_percentage', MIN_ARBITRAGE_PERCENTAGE)
+                break
+        
+        # Format the filter mode for display
+        if filter_mode == "dex_only":
+            mode_text = "DEX Only"
+        elif filter_mode == "cex_only":
+            mode_text = "CEX-CEX Only"
+        elif filter_mode == "cex_dex_only":
+            mode_text = "CEX-DEX Only"
+        elif filter_mode == "future":
+            mode_text = "Future Only"
+        else:
+            mode_text = "All Types"
+        
+        monitors_info.append(f"• {query_info} (ID: {query_id[:8]})\n  - {mode_text}\n  - Min: {min_percentage}%")
+    
+    # Build the response message
+    message_text = f"🔍 Currently monitoring {coin_count} coin{'s' if coin_count != 1 else ''}:\n\n"
+    message_text += "\n\n".join(monitors_info)
+    message_text += "\n\nUse /stop <ID> to stop a specific monitor or /stop to stop all."
+    
+    await message.answer(message_text)
+
+@router.message(Command("setmin"))
+async def cmd_set_min_percentage(message: Message):
+    """Set minimum arbitrage percentage for a specific coin monitor"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Check if user is admin and message is in private chat
+    if not is_admin(user_id) or message.chat.type != "private":
+        # Only respond in private chats
+        if message.chat.type == "private":
+            await message.answer("❌ Only admins can set minimum arbitrage percentage")
+        return
+    
+    # Parse arguments: /setmin <monitor_id> <percentage>
+    args = message.text.split()
+    if len(args) < 3:
+        await message.answer("⚠️ Please specify a monitor ID and percentage.\nExample: /setmin abc123 0.5")
+        return
+    
+    monitor_id = args[1]
+    try:
+        min_percentage = float(args[2])
+        if min_percentage <= 0:
+            await message.answer("❌ Minimum percentage must be greater than 0")
+            return
+    except ValueError:
+        await message.answer("❌ Invalid percentage value. Please enter a valid number")
+        return
+    
+    if chat_id not in active_monitors or not active_monitors[chat_id]:
+        await message.answer("❌ No active monitors found")
+        return
+    
+    # Find the monitor by ID
+    found = False
+    for query_id, task in list(active_monitors[chat_id].items()):
+        if query_id.startswith(monitor_id):
+            # Cancel the current task
+            task.cancel()
+            
+            # Find the associated query information
+            query_info = None
+            for chat_data in user_queries.values():
+                if query_id in chat_data:
+                    query_info = chat_data[query_id]
+                    # Update the minimum percentage
+                    query_info['min_percentage'] = min_percentage
+                    break
+            
+            if not query_info:
+                # If we can't find the query info, recreate it with default values
+                query_info = {
+                    'query': f"Unknown_{query_id[:8]}",
+                    'min_percentage': min_percentage,
+                    'filter_mode': "all",
+                    'query_id': query_id
+                }
+                
+                if chat_id not in user_queries:
+                    user_queries[chat_id] = {}
+                user_queries[chat_id][query_id] = query_info
+            
+            # Restart the monitor with the new minimum percentage
+            alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
+            topic_id = int(os.getenv("TOPIC_ID", "0"))
+            
+            # Start new monitoring task
+            task = asyncio.create_task(
+                monitor_prices(
+                    chat_id, 
+                    query_info['query'], 
+                    message.bot, 
+                    min_percentage, 
+                    query_info.get('network'), 
+                    query_info.get('pool_address'), 
+                    query_id
+                )
+            )
+            
+            # Update the active monitor
+            active_monitors[chat_id][query_id] = task
+            
+            # Send confirmation
+            await message.answer(f"✅ Updated minimum arbitrage for {query_info['query']} (ID: {query_id[:8]}) to {min_percentage}%")
+            
+            # Notify alert group
+            await message.bot.send_message(
+                chat_id=alert_group_id, 
+                text=f"⚙️ Updated minimum arbitrage for {query_info['query']} (ID: {query_id[:8]}) to {min_percentage}%", 
+                message_thread_id=topic_id, 
+                parse_mode="HTML", 
+                disable_web_page_preview=True
+            )
+            
+            found = True
+            break
+    
+    if not found:
+        await message.answer(f"❌ No monitor found with ID: {monitor_id}")
+        # List available monitors to help the user
+        await cmd_list_coins(message) 
