@@ -566,8 +566,8 @@ class ArbitragePriceMonitor:
             )
             
             # Format and send price message
-            price_message = await self._format_price_message(prices)
-            await self._send_message(price_message)
+            # price_message = await self._format_price_message(prices)
+            # await self._send_message(price_message)
             
             # Process arbitrage opportunities if we have prices
             if has_any_price:
