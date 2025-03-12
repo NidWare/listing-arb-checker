@@ -2,7 +2,7 @@ import requests
 import logging
 class DexTools:
 
-    basic_url = "https://public-api.dextools.io/trial/v2/"
+    basic_url = "https://public-api.dextools.io/advanced/"
 
     def __init__(self, api_key):
         self.api_key = api_key

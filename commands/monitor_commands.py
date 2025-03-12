@@ -380,19 +380,6 @@ async def cmd_stop(message: Message):
     
     if result["success"]:
         await message.answer(f"✅ Stopped monitoring for Monitor ID: {result['query_id'][:8]}", parse_mode=None)
-        
-        # Also notify the alert group
-        alert_group_id = ConfigManager.get_alert_group_id()
-        topic_id = int(os.getenv("TOPIC_ID", "0"))
-        bot = get_bot_instance()
-        
-        await bot.send_message(
-            chat_id=alert_group_id,
-            text=f"✅ Monitoring stopped for Monitor ID: {result['query_id'][:8]}",
-            message_thread_id=topic_id,
-            parse_mode=None,
-            disable_web_page_preview=True
-        )
     else:
         await message.answer(f"❌ {result['error']}", parse_mode=None)
         # List available monitors to help the user
