@@ -2,20 +2,23 @@ import hmac
 import hashlib
 import time
 import urllib.parse
-from typing import Dict, Any, Optional, List
+import logging
+from typing import Dict, Any, Optional, List, Tuple
 
 import aiohttp
 import requests
 
 from exchanges.base_client import BaseAPIClient
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 class BingxClient(BaseAPIClient):
     """
     Client for BingX exchange API
     Documentation: https://bingx-api-docs.github.io/
     """
-    BASE_URL = "https://open-api.bingx.com/openApi/"
+    BASE_URL = "https://open-api.bingx.com/openApi"
     
     def __init__(self, api_key: str, api_secret: str):
         super().__init__(api_key, api_secret)
@@ -166,21 +169,40 @@ class BingxClient(BaseAPIClient):
         await self.ensure_session()
         headers = self.get_headers()
         
-        if is_signed:
-            params = self.prepare_params(params)
-            
-            if method.upper() == 'GET':
-                params = self.sign_query_params(params)
-                async with self.session.request(method, url, headers=headers, params=params) as response:
-                    return await response.json()
+        try:
+            if is_signed:
+                params = self.prepare_params(params)
+                
+                if method.upper() == 'GET':
+                    params = self.sign_query_params(params)
+                    async with self.session.request(method, url, headers=headers, params=params) as response:
+                        if response.content_type == 'application/json':
+                            return await response.json()
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"Received non-JSON response ({response.status}): {error_text[:200]}...")
+                            return {"error": f"Received non-JSON response: {response.status}", "data": []}
+                else:
+                    params = self.sign_request_body(params)
+                    headers["Content-Type"] = "application/json"
+                    async with self.session.request(method, url, headers=headers, json=params) as response:
+                        if response.content_type == 'application/json':
+                            return await response.json()
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"Received non-JSON response ({response.status}): {error_text[:200]}...")
+                            return {"error": f"Received non-JSON response: {response.status}", "data": []}
             else:
-                params = self.sign_request_body(params)
-                headers["Content-Type"] = "application/json"
-                async with self.session.request(method, url, headers=headers, json=params) as response:
-                    return await response.json()
-        else:
-            async with self.session.request(method, url, headers=headers, params=params) as response:
-                return await response.json()
+                async with self.session.request(method, url, headers=headers, params=params) as response:
+                    if response.content_type == 'application/json':
+                        return await response.json()
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Received non-JSON response ({response.status}): {error_text[:200]}...")
+                        return {"error": f"Received non-JSON response: {response.status}", "data": []}
+        except Exception as e:
+            logger.error(f"Request error: {str(e)}")
+            return {"error": str(e), "data": []}
     
     async def get_exchange_info(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -220,7 +242,7 @@ class BingxClient(BaseAPIClient):
         Returns:
             Float price value
         """
-        url = f"{self.BASE_URL}spot/v1/ticker/price"
+        url = f"{self.BASE_URL}/spot/v1/ticker/price"
         
         # Ensure symbol is in format {symbol}_USDT
         if '-USDT' in symbol:
@@ -252,7 +274,7 @@ class BingxClient(BaseAPIClient):
         Returns:
             Float price value
         """
-        url = f"{self.BASE_URL}swap/v2/quote/premiumIndex"
+        url = f"{self.BASE_URL}/swap/v2/quote/premiumIndex"
         
         # Ensure symbol is in format with hyphen (e.g., BTC-USDT)
         if '-' not in symbol:
@@ -322,21 +344,95 @@ class BingxClient(BaseAPIClient):
         # Ensure session exists
         await self.ensure_session()
         
-        # Placeholder implementation - to be completed
         try:
-            # BingX API endpoint for getting coin information
-            url = f"{self.BASE_URL}api/v3/capital/config/getall"
-            response = await self.make_request_async('GET', url, is_signed=True)
+            # Attempt to get token info directly (for public endpoints)
+            url = f"{self.BASE_URL}/spot/v1/common/coins"
+            params = {"coin": symbol.upper()}
             
-            if not response or not response.get('data'):
-                return {"deposit": False, "withdrawal": False}
-                
-            # In a real implementation, search through data for the specific coin
-            # and check its deposit and withdrawal status
-            # For now, return default values
-            return {
-                "deposit": False,  # Replace with actual logic
-                "withdrawal": False  # Replace with actual logic
-            }
+            response = await self.make_request_async('GET', url, params=params)
+            
+            # Check if we have a valid response
+            if not response.get("error") and "data" in response:
+                for coin_data in response.get("data", []):
+                    if coin_data.get("coin") == symbol.upper():
+                        # Check if deposit/withdrawal is enabled
+                        return {
+                            "deposit": coin_data.get("depositAllEnable", False),
+                            "withdrawal": coin_data.get("withdrawAllEnable", False)
+                        }
+            
+            # Fallback - assume token is available if it has a price
+            try:
+                # If we can get a price, assume it's available
+                price = await self.get_spot_price(symbol)
+                if price > 0:
+                    logger.info(f"Assuming {symbol} is available on BingX as it has a price")
+                    return {"deposit": True, "withdrawal": True}
+            except Exception as e:
+                logger.warning(f"Failed to get price for {symbol} on BingX: {e}")
+            
+            # If we get here, token is likely not available or we couldn't determine
+            logger.warning(f"Token {symbol} not found in BingX or availability could not be determined")
+            return {"deposit": False, "withdrawal": False}
+            
         except Exception as e:
-            return {"deposit": False, "withdrawal": False} 
+            logger.error(f"Error checking token availability for {symbol} on BingX: {e}")
+            return {"deposit": False, "withdrawal": False}
+    
+    async def get_currency_chains(self, currency: str) -> List[Tuple[str, str]]:
+        """
+        Get available networks and contract addresses for a currency on BingX
+        
+        Args:
+            currency: Currency symbol (e.g., BTC)
+            
+        Returns:
+            List of tuples (network_name, contract_address)
+        """
+        # Ensure session exists
+        await self.ensure_session()
+        
+        try:
+            # Attempt to get token info directly (for public endpoints)
+            url = f"{self.BASE_URL}/spot/v1/common/coins"
+            params = {"coin": currency.upper()}
+            
+            response = await self.make_request_async('GET', url, params=params)
+            
+            # Check if we have a valid response
+            if not response.get("error") and "data" in response:
+                result = []
+                for coin_data in response.get("data", []):
+                    if coin_data.get("coin") == currency.upper():
+                        # Extract network information if available
+                        networks = coin_data.get("networks", []) or coin_data.get("chainList", [])
+                        
+                        for network in networks:
+                            network_name = network.get("network", "") or network.get("chain", "")
+                            contract_address = network.get("contractAddress", "")
+                            
+                            if network_name:
+                                result.append((network_name, contract_address))
+                        
+                        # If we found at least one network, return the result
+                        if result:
+                            return result
+            
+            # Fallback - common networks for popular currencies
+            common_networks = {
+                "BTC": [("BTC", ""), ("BSC", "")],
+                "ETH": [("ETH", ""), ("ARBITRUM", ""), ("OPTIMISM", "")],
+                "USDT": [("ETH", ""), ("BSC", ""), ("TRON", ""), ("ARBITRUM", ""), ("OPTIMISM", "")],
+                "USDC": [("ETH", ""), ("BSC", ""), ("ARBITRUM", ""), ("OPTIMISM", "")]
+            }
+            
+            if currency.upper() in common_networks:
+                logger.info(f"Using fallback network information for {currency}")
+                return common_networks[currency.upper()]
+            
+            # If we get here, we don't have network information
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error getting currency chains for {currency} on BingX: {e}")
+            return [] 

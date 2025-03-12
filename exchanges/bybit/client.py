@@ -4,7 +4,7 @@ import time
 import requests
 import aiohttp
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from ..base_client import BaseAPIClient
 
 logger = logging.getLogger(__name__)
@@ -170,18 +170,110 @@ class BybitClient(BaseAPIClient):
         # Ensure session exists
         await self.ensure_session()
         
-        # Placeholder implementation - to be completed
-        url = f"{self.base_url}/asset/coin/query-info"
         timestamp = self.get_timestamp()
-        params = f"timestamp={timestamp}&recvWindow={self.recv_window}"
+        params = "coin=" + symbol
         signature = self.generate_signature(timestamp, params)
         headers = self.get_headers(timestamp, signature)
         
+        url = f"{self.base_url}/asset/coin/query-info"
+        
         try:
-            # This will need to be implemented to query coin info and check availability
-            response = {"deposit": False, "withdrawal": False}
-            return response
+            async with self.session.get(f"{url}?{params}", headers=headers) as response:
+                if response.status != 200:
+                    logger.error(f"Bybit API error: {await response.text()}")
+                    return {"deposit": False, "withdrawal": False}
+                
+                data = await response.json()
+                
+                if data.get('retCode') != 0 or not data.get('result', {}).get('rows'):
+                    logger.error(f"Failed to get coin info from Bybit: {data}")
+                    return {"deposit": False, "withdrawal": False}
+                
+                # Search for the token in the response
+                for coin in data['result']['rows']:
+                    if coin.get('coin') == symbol.upper():
+                        # Get deposit and withdrawal status
+                        chains = coin.get('chains', [])
+                        
+                        deposit_enabled = False
+                        withdrawal_enabled = False
+                        
+                        # If any chain has deposits/withdrawals enabled, mark as available
+                        for chain in chains:
+                            if chain.get('chainDeposit') == 'on':
+                                deposit_enabled = True
+                            if chain.get('chainWithdraw') == 'on':
+                                withdrawal_enabled = True
+                        
+                        return {
+                            "deposit": deposit_enabled,
+                            "withdrawal": withdrawal_enabled
+                        }
+                
+                # Token not found
+                logger.warning(f"Token {symbol} not found in Bybit")
+                return {"deposit": False, "withdrawal": False}
+        
         except Exception as e:
             logger.error(f"Error checking token availability for {symbol}: {e}")
             return {"deposit": False, "withdrawal": False}
+            
+    async def get_currency_chains(self, currency: str) -> List[Tuple[str, str]]:
+        """
+        Get available networks and contract addresses for a currency on Bybit
+        
+        Args:
+            currency: Currency symbol (e.g., BTC)
+            
+        Returns:
+            List of tuples (network_name, contract_address)
+        """
+        # Ensure session exists
+        await self.ensure_session()
+        
+        timestamp = self.get_timestamp()
+        params = "coin=" + currency
+        signature = self.generate_signature(timestamp, params)
+        headers = self.get_headers(timestamp, signature)
+        
+        url = f"{self.base_url}/asset/coin/query-info"
+        
+        try:
+            async with self.session.get(f"{url}?{params}", headers=headers) as response:
+                if response.status != 200:
+                    logger.error(f"Bybit API error: {await response.text()}")
+                    return []
+                
+                data = await response.json()
+                
+                if data.get('retCode') != 0 or not data.get('result', {}).get('rows'):
+                    logger.error(f"Failed to get coin info from Bybit: {data}")
+                    return []
+                
+                # Search for the currency in the response
+                for coin in data['result']['rows']:
+                    if coin.get('coin') == currency.upper():
+                        result = []
+                        
+                        # Extract network information
+                        chains = coin.get('chains', [])
+                        for chain in chains:
+                            network_name = chain.get('chain', '')
+                            # Bybit might not expose contract addresses directly, so we'll use 
+                            # empty string as a placeholder for contract address
+                            contract_address = chain.get('contractAddress', '') 
+                            
+                            # Only include networks with names
+                            if network_name:
+                                result.append((network_name, contract_address))
+                        
+                        return result
+                
+                # Currency not found
+                logger.warning(f"Currency {currency} not found in Bybit")
+                return []
+        
+        except Exception as e:
+            logger.error(f"Error getting currency chains for {currency}: {e}")
+            return []
         

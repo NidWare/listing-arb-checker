@@ -4,11 +4,13 @@ from exchanges.gate.client import GateClient
 from exchanges.bitget.client import BitgetClient
 from exchanges.bybit.client import BybitClient
 from exchanges.bingx.client import BingxClient
+from exchanges.binance.client import BinanceClient
 from exchanges.mexc.coin_service import MexcCoinService
 from exchanges.gate.coin_service import GateCoinService
 from exchanges.bitget.coin_service import BitgetCoinService
 from exchanges.bybit.coin_service import BybitCoinService
 from exchanges.bingx.coin_service import BingxCoinService
+from exchanges.binance.coin_service import BinanceCoinService
 from config.config_manager import ConfigManager
 import aiohttp
 import logging
@@ -22,13 +24,15 @@ class ExchangeService:
         bitget_credentials = ConfigManager.get_bitget_credentials()
         bybit_credentials = ConfigManager.get_bybit_credentials()
         bingx_credentials = ConfigManager.get_bingx_credentials()
+        binance_credentials = ConfigManager.get_binance_credentials()
         
         self.clients = {
             'mexc': (MexcClient(**mexc_credentials), MexcCoinService()),
             'gate': (GateClient(), GateCoinService()),
             'bitget': (BitgetClient(**bitget_credentials), BitgetCoinService()),
             'bybit': (BybitClient(**bybit_credentials), BybitCoinService()),
-            'bingx': (BingxClient(**bingx_credentials), BingxCoinService())
+            'bingx': (BingxClient(**bingx_credentials), BingxCoinService()),
+            'binance': (BinanceClient(**binance_credentials), BinanceCoinService())
         }
         self._session = None
 

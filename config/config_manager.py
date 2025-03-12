@@ -78,4 +78,15 @@ class ConfigManager:
         return {
             'api_key': api_key,
             'api_secret': api_secret
+        }
+
+    @staticmethod
+    def get_binance_credentials() -> dict:
+        api_key = os.getenv('BINANCE_API_KEY')
+        api_secret = os.getenv('BINANCE_API_SECRET')
+        if not api_key or not api_secret:
+            raise ValueError("Binance credentials not found in environment variables")
+        return {
+            'api_key': api_key,
+            'api_secret': api_secret
         } 

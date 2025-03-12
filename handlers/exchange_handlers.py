@@ -535,9 +535,9 @@ class ArbitragePriceMonitor:
         self.last_opportunities = set()
         self.alert_group_id = int(os.getenv("ALERT_GROUP_ID"))
         self.topic_id = int(os.getenv("TOPIC_ID", "1"))
-        self.cex_exchanges = ["bitget", "gate", "mexc", "bybit", "bingx"]
+        self.cex_exchanges = ["bitget", "gate", "mexc", "bybit", "bingx", "binance"]
         self.chain_mapping = {
-            'BASEEVM': 'base',
+            'BASEEVM': 'BASEEVM',
             'ETH': 'ether',
             'BSC': 'bsc',
             'MATIC': 'polygon',
@@ -752,6 +752,136 @@ class ArbitragePriceMonitor:
                     except Exception as e:
                         logger.error(f"Error getting token availability for {self.query} on Gate.io: {str(e)}")
                 
+                # Get token availability status for Binance
+                elif exchange == "binance":
+                    try:
+                        # Get token availability from Binance
+                        binance_client = exchange_service._get_exchange_client("binance")
+                        availability = await binance_client.check_token_availability(self.query)
+                        
+                        # Create status indicators for deposit and withdrawal
+                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
+                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
+                        
+                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
+                        
+                        # Try to get network information if available
+                        try:
+                            networks = await binance_client.get_currency_chains(self.query)
+                            if networks:
+                                price_message += "<b>Networks:</b> "
+                                network_names = [network_name for network_name, _ in networks]
+                                price_message += ", ".join(network_names) + "\n"
+                        except Exception as e:
+                            logger.error(f"Error getting network information for {self.query} on Binance: {str(e)}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error getting token availability for {self.query} on Binance: {str(e)}")
+                
+                # Get token availability status for Bitget
+                elif exchange == "bitget":
+                    try:
+                        # Get token availability from Bitget
+                        bitget_client = exchange_service._get_exchange_client("bitget")
+                        availability = await bitget_client.check_token_availability(self.query)
+                        
+                        # Create status indicators for deposit and withdrawal
+                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
+                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
+                        
+                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
+                        
+                        # Try to get network information if available
+                        try:
+                            networks = await bitget_client.get_currency_chains(self.query)
+                            if networks:
+                                price_message += "<b>Networks:</b> "
+                                network_names = [network_name for network_name, _ in networks]
+                                price_message += ", ".join(network_names) + "\n"
+                        except Exception as e:
+                            logger.error(f"Error getting network information for {self.query} on Bitget: {str(e)}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error getting token availability for {self.query} on Bitget: {str(e)}")
+                
+                # Get token availability status for MEXC
+                elif exchange == "mexc":
+                    try:
+                        # Get token availability from MEXC
+                        mexc_client = exchange_service._get_exchange_client("mexc")
+                        availability = await mexc_client.check_token_availability(self.query)
+                        
+                        # Create status indicators for deposit and withdrawal
+                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
+                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
+                        
+                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
+                        
+                        # Try to get network information if available
+                        try:
+                            networks = await mexc_client.get_currency_chains(self.query)
+                            if networks:
+                                price_message += "<b>Networks:</b> "
+                                network_names = [network_name for network_name, _ in networks]
+                                price_message += ", ".join(network_names) + "\n"
+                        except Exception as e:
+                            logger.error(f"Error getting network information for {self.query} on MEXC: {str(e)}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error getting token availability for {self.query} on MEXC: {str(e)}")
+                
+                # Get token availability status for ByBit
+                elif exchange == "bybit":
+                    try:
+                        # Get token availability from ByBit
+                        bybit_client = exchange_service._get_exchange_client("bybit")
+                        availability = await bybit_client.check_token_availability(self.query)
+                        
+                        # Create status indicators for deposit and withdrawal
+                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
+                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
+                        
+                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
+                        
+                        # Try to get network information if available
+                        try:
+                            networks = await bybit_client.get_currency_chains(self.query)
+                            if networks:
+                                price_message += "<b>Networks:</b> "
+                                network_names = [network_name for network_name, _ in networks]
+                                price_message += ", ".join(network_names) + "\n"
+                        except Exception as e:
+                            logger.error(f"Error getting network information for {self.query} on ByBit: {str(e)}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error getting token availability for {self.query} on ByBit: {str(e)}")
+                
+                # Get token availability status for BingX
+                elif exchange == "bingx":
+                    try:
+                        # Get token availability from BingX
+                        bingx_client = exchange_service._get_exchange_client("bingx")
+                        availability = await bingx_client.check_token_availability(self.query)
+                        
+                        # Create status indicators for deposit and withdrawal
+                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
+                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
+                        
+                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
+                        
+                        # Try to get network information if available
+                        try:
+                            networks = await bingx_client.get_currency_chains(self.query)
+                            if networks:
+                                price_message += "<b>Networks:</b> "
+                                network_names = [network_name for network_name, _ in networks]
+                                price_message += ", ".join(network_names) + "\n"
+                        except Exception as e:
+                            logger.error(f"Error getting network information for {self.query} on BingX: {str(e)}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error getting token availability for {self.query} on BingX: {str(e)}")
+                
                 # Add spot price
                 if prices[exchange].get('spot'):
                     price_message += f"<a href='{spot_url}'>Spot</a>: ${format_price(prices[exchange]['spot'])}\n"
@@ -870,7 +1000,7 @@ class ArbitragePriceMonitor:
         Generate a URL for the given exchange, market type, and token symbol
         
         Args:
-            exchange: Exchange name (gate, bitget, bybit, mexc, bingx)
+            exchange: Exchange name (gate, bitget, bybit, mexc, bingx, binance)
             market_type: 'spot' or 'futures'
             token_symbol: Token symbol (e.g. BTC)
             
@@ -890,6 +1020,9 @@ class ArbitragePriceMonitor:
                 return f"https://www.mexc.com/ru-RU/exchange/{token_symbol}_USDT?_from=search_spot_trade"
             elif exchange == 'bingx':
                 return f"https://bingx.com/en/spot/{token_symbol}USDT/"
+            elif exchange == 'binance':
+                # Use Binance specific URL format for spot markets
+                return f"https://www.binance.com/en/trade/{token_symbol}_USDT?type=spot"
         
         elif market_type == 'futures':
             if exchange == 'gate':
@@ -902,6 +1035,9 @@ class ArbitragePriceMonitor:
                 return f"https://futures.mexc.com/ru-RU/exchange/{token_symbol}_USDT?type=linear_swap"
             elif exchange == 'bingx':
                 return f"https://bingx.com/en/perpetual/{token_symbol}-USDT/"
+            elif exchange == 'binance':
+                # Use Binance specific URL format for futures markets
+                return f"https://www.binance.com/en/futures/{token_symbol}USDT"
         
         # Default fallback - return empty string if no match
         return ""

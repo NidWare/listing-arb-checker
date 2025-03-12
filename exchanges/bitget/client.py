@@ -1,6 +1,10 @@
 import aiohttp
+import logging
 from ..base_client import BaseAPIClient
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 class BitgetClient(BaseAPIClient):
     BASE_URL = "https://api.bitget.com/api/v2/spot/public"
@@ -64,7 +68,6 @@ class BitgetClient(BaseAPIClient):
             Dict with keys 'deposit' and 'withdrawal', each with boolean values
             indicating availability status
         """
-        # Placeholder implementation - to be completed
         async with aiohttp.ClientSession() as session:
             url = "https://api.bitget.com/api/v2/spot/public/coins"
             
@@ -72,15 +75,53 @@ class BitgetClient(BaseAPIClient):
                 async with session.get(url) as response:
                     data = await response.json()
                     if data['code'] == '00000' and data['data']:
-                        # In a real implementation, search through data for the specific coin
-                        # and check its deposit and withdrawal status
-                        # For now, return default values
-                        return {
-                            "deposit": False,  # Replace with actual logic
-                            "withdrawal": False  # Replace with actual logic
-                        }
+                        for coin in data['data']:
+                            if coin.get('coin') == symbol.upper():
+                                return {
+                                    "deposit": coin.get('depositStatus', '0') == '1',
+                                    "withdrawal": coin.get('withdrawStatus', '0') == '1'
+                                }
+                        # Token not found
+                        return {"deposit": False, "withdrawal": False}
                     else:
                         return {"deposit": False, "withdrawal": False}
             except Exception as e:
-                return {"deposit": False, "withdrawal": False} 
+                logger.error(f"Error checking token availability on Bitget: {e}")
+                return {"deposit": False, "withdrawal": False}
+    
+    async def get_currency_chains(self, currency: str) -> List[Tuple[str, str]]:
+        """
+        Get available networks and contract addresses for a currency on Bitget
+        
+        Args:
+            currency: Currency symbol (e.g., BTC)
+            
+        Returns:
+            List of tuples (network_name, contract_address)
+        """
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.bitget.com/api/v2/spot/public/coins"
+            
+            try:
+                async with session.get(url) as response:
+                    data = await response.json()
+                    if data['code'] == '00000' and data['data']:
+                        result = []
+                        for coin in data['data']:
+                            if coin.get('coin') == currency.upper():
+                                # Extract chain information
+                                chains = coin.get('chains', [])
+                                for chain in chains:
+                                    chain_name = chain.get('chain', '')
+                                    contract_address = chain.get('contractAddress', '')
+                                    # Only include chains with necessary information
+                                    if chain_name:
+                                        result.append((chain_name, contract_address))
+                                break
+                        return result
+                    else:
+                        return []
+            except Exception as e:
+                logger.error(f"Error getting currency chains on Bitget: {e}")
+                return []
             

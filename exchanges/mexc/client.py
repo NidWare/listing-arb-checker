@@ -4,7 +4,7 @@ import time
 import requests
 import aiohttp
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from ..base_client import BaseAPIClient
 
 logger = logging.getLogger(__name__)
@@ -221,23 +221,102 @@ class MexcClient(BaseAPIClient):
         # Ensure session exists
         await self.ensure_session()
         
-        # Placeholder implementation - to be completed
         try:
-            coins_info = await self.get_all_coins()
+            # Get authenticated coin information
+            timestamp = str(int(time.time() * 1000))
             
-            if not coins_info or "data" not in coins_info:
-                logger.error(f"Failed to retrieve coins info from MEXC")
-                return {"deposit": False, "withdrawal": False}
-                
-            # In a real implementation, this would search for the symbol in the coins_info
-            # and extract the deposit and withdrawal status
-            # For now, we return default values
-            return {
-                "deposit": False,  # Replace with actual logic
-                "withdrawal": False  # Replace with actual logic
+            query_string = f"recvWindow=5000&timestamp={timestamp}"
+            signature = self.generate_signature(query_string)
+            
+            params = {
+                'recvWindow': '5000',
+                'timestamp': timestamp,
+                'signature': signature
             }
+            
+            url = f"{self.BASE_URL}/capital/config/getall"
+            
+            headers = self.get_headers()
+            async with self.session.get(url, params=params, headers=headers) as response:
+                if response.status != 200:
+                    logger.error(f"MEXC API error: {await response.text()}")
+                    return {"deposit": False, "withdrawal": False}
+                
+                coins_info = await response.json()
+                
+                # Search for the symbol in the coins_info
+                for coin in coins_info:
+                    if coin.get('coin') == symbol.upper():
+                        return {
+                            "deposit": coin.get('depositAllEnable', False),
+                            "withdrawal": coin.get('withdrawAllEnable', False)
+                        }
+                
+                # Symbol not found
+                logger.warning(f"Token {symbol} not found in MEXC")
+                return {"deposit": False, "withdrawal": False}
         except Exception as e:
             logger.error(f"Error checking token availability for {symbol}: {e}")
             return {"deposit": False, "withdrawal": False}
+
+    async def get_currency_chains(self, currency: str) -> List[Tuple[str, str]]:
+        """
+        Get available networks and contract addresses for a currency on MEXC
+        
+        Args:
+            currency: Currency symbol (e.g., BTC)
+            
+        Returns:
+            List of tuples (network_name, contract_address)
+        """
+        # Ensure session exists
+        await self.ensure_session()
+        
+        try:
+            # Get authenticated coin information
+            timestamp = str(int(time.time() * 1000))
+            
+            query_string = f"recvWindow=5000&timestamp={timestamp}"
+            signature = self.generate_signature(query_string)
+            
+            params = {
+                'recvWindow': '5000',
+                'timestamp': timestamp,
+                'signature': signature
+            }
+            
+            url = f"{self.BASE_URL}/capital/config/getall"
+            
+            headers = self.get_headers()
+            async with self.session.get(url, params=params, headers=headers) as response:
+                if response.status != 200:
+                    logger.error(f"MEXC API error: {await response.text()}")
+                    return []
+                
+                coins_info = await response.json()
+                
+                # Search for the currency in the coins_info
+                for coin in coins_info:
+                    if coin.get('coin') == currency.upper():
+                        result = []
+                        
+                        # Extract network information
+                        networks = coin.get('networkList', [])
+                        for network in networks:
+                            network_name = network.get('network', '')
+                            contract_address = network.get('contractAddress', '')
+                            
+                            # Only include networks with the necessary information
+                            if network_name:
+                                result.append((network_name, contract_address))
+                        
+                        return result
+                
+                # Currency not found
+                logger.warning(f"Currency {currency} not found in MEXC")
+                return []
+        except Exception as e:
+            logger.error(f"Error getting currency chains for {currency}: {e}")
+            return []
 
     # Add other async methods as needed 
