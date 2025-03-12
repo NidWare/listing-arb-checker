@@ -243,14 +243,41 @@ class MexcClient(BaseAPIClient):
                     return {"deposit": False, "withdrawal": False}
                 
                 coins_info = await response.json()
+                logger.info(f"MEXC coins info retrieved successfully")
                 
                 # Search for the symbol in the coins_info
                 for coin in coins_info:
                     if coin.get('coin') == symbol.upper():
-                        return {
-                            "deposit": coin.get('depositAllEnable', False),
-                            "withdrawal": coin.get('withdrawAllEnable', False)
-                        }
+                        # Check if depositAllEnable/withdrawAllEnable exist at coin level
+                        if 'depositAllEnable' in coin and 'withdrawAllEnable' in coin:
+                            return {
+                                "deposit": coin.get('depositAllEnable', False),
+                                "withdrawal": coin.get('withdrawAllEnable', False)
+                            }
+                        
+                        # If not found at coin level, check networkList
+                        network_list = coin.get('networkList', [])
+                        if network_list:
+                            # Consider a coin available if at least one network allows deposit/withdrawal
+                            deposit_available = False
+                            withdrawal_available = False
+                            
+                            for network in network_list:
+                                # Check if this network is for the correct coin
+                                if network.get('coin') == symbol.upper():
+                                    if network.get('depositEnable', False):
+                                        deposit_available = True
+                                    if network.get('withdrawEnable', False):
+                                        withdrawal_available = True
+                            
+                            return {
+                                "deposit": deposit_available,
+                                "withdrawal": withdrawal_available
+                            }
+                        
+                        # No network list found
+                        logger.warning(f"No network information found for {symbol}")
+                        return {"deposit": False, "withdrawal": False}
                 
                 # Symbol not found
                 logger.warning(f"Token {symbol} not found in MEXC")

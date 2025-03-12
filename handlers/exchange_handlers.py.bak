@@ -52,6 +52,9 @@ def format_price(price: float) -> str:
     else:
         return f"{price:.4f}"
 
+# Store user filter preferences
+user_filter_preferences = {}  # Format: {chat_id: "cex_only" or "all"}
+
 # Function to generate a unique ID for each query
 def generate_query_id() -> str:
     """Generate a unique ID for a monitoring query"""

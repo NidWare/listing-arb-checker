@@ -53,6 +53,28 @@ def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
+def get_network_keyboard() -> InlineKeyboardMarkup:
+    """Create a keyboard for selecting network"""
+    builder = InlineKeyboardBuilder()
+    
+    networks = [
+        {"text": "Ethereum", "callback_data": "network_ether"},
+        {"text": "Solana", "callback_data": "network_solana"},
+        {"text": "Base", "callback_data": "network_base"},
+        {"text": "Avalanche", "callback_data": "network_avalanche"},
+        {"text": "BSC", "callback_data": "network_bsc"},
+        {"text": "Arbitrum", "callback_data": "network_arbitrum"}
+    ]
+    
+    for network in networks:
+        builder.button(
+            text=network["text"],
+            callback_data=network["callback_data"]
+        )
+    
+    builder.adjust(2)
+    return builder.as_markup()
+
 def get_filter_mode_display_text(filter_mode: str) -> str:
     """Convert filter mode to human-readable text"""
     if filter_mode == "cex_only":
@@ -124,9 +146,12 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     
     # For DEX related filters, ask for network and token address first
     if filter_mode in ["cex_dex_only", "future", "all"]:
+        # Show network selection keyboard
+        network_keyboard = get_network_keyboard()
         await callback.message.answer(
             f"Coin: {coin}\nFilter mode: {mode_text}\n\n"
-            f"For DEX operations, please enter the network name (e.g., Ethereum, BSC, Polygon)"
+            f"Please select the network:",
+            reply_markup=network_keyboard
         )
         # Mark that we're waiting for network input
         user_monitoring_setup[user_id]["waiting_for"] = "network"
@@ -138,6 +163,64 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
         )
         # Mark that we're waiting for percentage input
         user_monitoring_setup[user_id]["waiting_for"] = "percentage"
+
+@monitor_router.callback_query(F.data.startswith("network_"))
+async def handle_network_callback(callback: CallbackQuery):
+    """Handle network selection"""
+    user_id = callback.from_user.id
+    
+    logger.info(f"Received network callback from user {user_id}: {callback.data}")
+    
+    # Check if user is admin
+    if user_id not in ConfigManager.get_admin_user_ids():
+        logger.warning(f"Non-admin user {user_id} attempted to select network")
+        await callback.answer("Only admins can select network", show_alert=True)
+        return
+    
+    # Check if user has an active setup
+    if user_id not in user_monitoring_setup:
+        await callback.answer("No active monitoring setup found. Please use /addcoin command first.", show_alert=True)
+        return
+    
+    # Check if user is waiting for network input
+    if user_monitoring_setup[user_id].get("waiting_for") != "network":
+        await callback.answer("Unexpected network selection", show_alert=True)
+        return
+    
+    # Extract network from callback data (remove "network_" prefix)
+    network_id = callback.data[8:]  # Use exact API network identifier
+    
+    # Map network_id to display name for UI
+    network_display_names = {
+        "ether": "Ethereum",
+        "solana": "Solana",
+        "base": "Base",
+        "avalanche": "Avalanche",
+        "bsc": "BSC",
+        "arbitrum": "Arbitrum"
+    }
+    
+    network_display = network_display_names.get(network_id, network_id.capitalize())
+    
+    # Store the network in the user's setup (using API-compatible network id)
+    user_monitoring_setup[user_id]["network"] = network_id
+    user_monitoring_setup[user_id]["waiting_for"] = "pool_address"
+    
+    # Get the stored coin
+    coin = user_monitoring_setup[user_id]["coin"]
+    
+    # Get display text for the selected filter mode
+    filter_mode = user_monitoring_setup[user_id]["filter_mode"]
+    mode_text = get_filter_mode_display_text(filter_mode)
+    
+    # Always answer the callback to prevent the "loading" state
+    await callback.answer(f"Network set to: {network_display}")
+    
+    # Ask for pool address
+    await callback.message.answer(
+        f"Coin: {coin}\nFilter mode: {mode_text}\nNetwork: {network_display}\n\n"
+        f"Now, please enter the pool address for {coin} on {network_display}"
+    )
 
 @monitor_router.message(Command("cancel"))
 async def cmd_cancel(message: Message):
@@ -156,7 +239,7 @@ async def cmd_cancel(message: Message):
 # This filter needs to run before the catch-all handler in basic_commands
 @monitor_router.message(lambda message: message.from_user.id in user_monitoring_setup and not message.text.startswith('/'))
 async def handle_min_percentage(message: Message):
-    """Handle input for monitoring setup wizard (network, pool address, or percentage)"""
+    """Handle input for monitoring setup wizard (pool address or percentage)"""
     logger.info(f"Processing input from user {message.from_user.id} who is in user_monitoring_setup")
     user_id = message.from_user.id
     
@@ -184,19 +267,8 @@ async def handle_min_percentage(message: Message):
         )
         return
     
-    # If waiting for network information
-    if waiting_for == "network":
-        network = message.text.strip()
-        setup_data["network"] = network
-        setup_data["waiting_for"] = "pool_address"
-        await message.answer(
-            f"Network: {network}\n\n"
-            f"Now, please enter the pool address for {coin} on {network}"
-        )
-        return
-    
     # If waiting for pool address
-    elif waiting_for == "pool_address":
+    if waiting_for == "pool_address":
         pool_address = message.text.strip()
         setup_data["pool_address"] = pool_address
         setup_data["waiting_for"] = "percentage"
@@ -254,6 +326,7 @@ async def handle_min_percentage(message: Message):
         result = await monitor_service.start_monitoring(
             user_id=user_id,
             query=coin,
+            bot=message.bot,
             min_percentage=min_percentage,
             filter_mode=filter_mode,
             network=network,
@@ -384,11 +457,14 @@ async def cmd_set_filter(message: Message):
             user_monitoring_setup[message.from_user.id]["pool_address"] = None
         
         # For DEX related filters, ask for network and pool address
-        if filter_mode in ["cex_dex_only", "all"]:
+        if filter_mode in ["cex_dex_only", "future", "all"]:
             user_monitoring_setup[message.from_user.id]["waiting_for"] = "network"
+            # Show network selection keyboard
+            network_keyboard = get_network_keyboard()
             await message.answer(
                 f"Coin: {coin}\nFilter mode: {mode_text}\n\n"
-                f"For DEX operations, please enter the network name (e.g., Ethereum, BSC, Polygon)"
+                f"Please select the network:",
+                reply_markup=network_keyboard
             )
         else:
             # For CEX-only mode, proceed to ask for minimum arbitrage percentage

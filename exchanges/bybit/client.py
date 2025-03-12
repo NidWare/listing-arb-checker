@@ -184,6 +184,7 @@ class BybitClient(BaseAPIClient):
                     return {"deposit": False, "withdrawal": False}
                 
                 data = await response.json()
+                logger.info(f"Bybit coin info: {data}")
                 
                 if data.get('retCode') != 0 or not data.get('result', {}).get('rows'):
                     logger.error(f"Failed to get coin info from Bybit: {data}")
@@ -200,9 +201,10 @@ class BybitClient(BaseAPIClient):
                         
                         # If any chain has deposits/withdrawals enabled, mark as available
                         for chain in chains:
-                            if chain.get('chainDeposit') == 'on':
+                            # Bybit returns status as '1' for enabled instead of 'on'
+                            if chain.get('chainDeposit') == '1' or chain.get('chainDeposit') == 1:
                                 deposit_enabled = True
-                            if chain.get('chainWithdraw') == 'on':
+                            if chain.get('chainWithdraw') == '1' or chain.get('chainWithdraw') == 1:
                                 withdrawal_enabled = True
                         
                         return {
