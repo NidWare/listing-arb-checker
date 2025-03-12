@@ -2,12 +2,14 @@ import asyncio
 import logging
 import os
 import uuid
+from typing import Dict, Any, Optional
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters import Command
+
 from config.config_manager import ConfigManager
-from handlers.exchange_handlers import monitor_prices, user_filter_preferences, active_monitors as handler_active_monitors, cmd_add_coin, cmd_list_coins
 from commands.bot_instance import get_bot_instance
 
 # Configure logging
@@ -16,21 +18,13 @@ logger = logging.getLogger(__name__)
 # Create router with name to help with debugging
 monitor_router = Router(name="monitor_commands")
 
-# Store active monitoring tasks
-active_monitors = {}
-
-# Store temporary user queries while waiting for filter and percentage input
-# Format: {user_id: {"coin": coin_name, "filter_mode": None or "cex_only"/"all", 
-#                    "network": None or network_name, "token_address": None or address}}
+# Format: {user_id: {"coin": coin_name, "filter_mode": None, 
+#                   "network": None, "pool_address": None, "waiting_for": step}}
 user_monitoring_setup = {}
 
-# Keep this for backward compatibility with imports
-user_queries = {}
-
-# Function to generate a unique ID for each query
-def generate_query_id() -> str:
-    """Generate a unique ID for a monitoring query"""
-    return str(uuid.uuid4())
+# Delay import of MonitorService to avoid circular import
+# and initialize it later after the module is fully loaded
+monitor_service = None
 
 def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
     """Create a keyboard for selecting filter mode"""
@@ -59,8 +53,20 @@ def get_filter_mode_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
+def get_filter_mode_display_text(filter_mode: str) -> str:
+    """Convert filter mode to human-readable text"""
+    if filter_mode == "cex_only":
+        return "CEX-CEX Only (no DEX)"
+    elif filter_mode == "cex_dex_only":
+        return "ONLY CEX-DEX" 
+    elif filter_mode == "future":
+        return "DEX + CEX (ONLY FUTURE)"
+    else:
+        return "CEX-CEX + DEX"
+
 @monitor_router.message(Command("monitor"))
 async def cmd_monitor(message: Message):
+    """Deprecated - redirects users to /addcoin"""
     logger.info(f"Received /monitor command from user {message.from_user.id}")
     if message.from_user.id not in ConfigManager.get_admin_user_ids():
         await message.answer("⚠️ You don't have permission to use this command.")
@@ -77,7 +83,6 @@ async def cmd_monitor(message: Message):
 async def handle_filter_mode_callback(callback: CallbackQuery):
     """Handle filter mode selection"""
     user_id = callback.from_user.id
-    chat_id = callback.message.chat.id
     
     logger.info(f"Received filter callback from user {user_id}: {callback.data}")
     
@@ -89,26 +94,14 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     
     # Check if user has an active setup
     if user_id not in user_monitoring_setup:
-        await callback.answer("No active monitoring setup found. Please use /monitor command first.", show_alert=True)
+        await callback.answer("No active monitoring setup found. Please use /addcoin command first.", show_alert=True)
         return
     
+    # Ensure MonitorService is initialized
+    _ensure_monitor_service()
+    
     # Extract filter mode from callback data
-    callback_data = callback.data
-    
-    # Determine the filter mode based on the full callback data
-    if callback_data == "filter_cex":
-        filter_mode = "cex_only"
-    elif callback_data == "filter_cex_dex_only":
-        filter_mode = "cex_dex_only"
-    elif callback_data == "filter_future":
-        filter_mode = "future"
-    elif callback_data == "filter_all":
-        filter_mode = "all"
-    else:
-        logger.warning(f"Unknown filter mode callback: {callback_data}")
-        filter_mode = "all"  # Default to all
-    
-    logger.info(f"Parsed filter mode: {filter_mode} from callback data: {callback_data}")
+    filter_mode = monitor_service.parse_filter_mode(callback.data)
     
     # Store the filter mode in the user's setup
     user_monitoring_setup[user_id]["filter_mode"] = filter_mode
@@ -123,17 +116,8 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     # Get the stored coin
     coin = user_monitoring_setup[user_id]["coin"]
     
-    # Prepare the display text
-    if filter_mode == "cex_only":
-        mode_text = "CEX-CEX Only (no DEX)"
-    elif filter_mode == "cex_dex_only":
-        mode_text = "ONLY CEX-DEX"
-    elif filter_mode == "future":
-        mode_text = "DEX + CEX (ONLY FUTURE)"
-    else:
-        mode_text = "CEX-CEX + DEX"
-    
-    logger.info(f"Display text for filter mode {filter_mode}: {mode_text}")
+    # Get display text for the selected filter mode
+    mode_text = get_filter_mode_display_text(filter_mode)
     
     # Always answer the callback to prevent the "loading" state
     await callback.answer(f"Filter set to: {mode_text}")
@@ -172,6 +156,7 @@ async def cmd_cancel(message: Message):
 # This filter needs to run before the catch-all handler in basic_commands
 @monitor_router.message(lambda message: message.from_user.id in user_monitoring_setup and not message.text.startswith('/'))
 async def handle_min_percentage(message: Message):
+    """Handle input for monitoring setup wizard (network, pool address, or percentage)"""
     logger.info(f"Processing input from user {message.from_user.id} who is in user_monitoring_setup")
     user_id = message.from_user.id
     
@@ -182,7 +167,7 @@ async def handle_min_percentage(message: Message):
     # Get the user's setup data
     setup_data = user_monitoring_setup.get(user_id)
     if not setup_data:
-        await message.answer("⚠️ No active setup found. Please use /monitor command.")
+        await message.answer("⚠️ No active setup found. Please use /addcoin command.")
         return
     
     # Get the coin and filter mode
@@ -255,124 +240,48 @@ async def handle_min_percentage(message: Message):
     network = setup_data.get("network")
     pool_address = setup_data.get("pool_address")
     
+    # Generate a unique query ID
+    query_id = str(uuid.uuid4())
+    
     # Remove the setup from the waiting list
     del user_monitoring_setup[user_id]
     
-    # Use the supergroup ID for monitoring
-    chat_id = ConfigManager.get_alert_group_id()  # Get from config
-    topic_id = int(os.getenv("TOPIC_ID", "1"))  # Get topic ID from env
-    logger.info(f"Attempting to send message to chat_id: {chat_id} with topic_id: {topic_id}")
-
+    # Ensure MonitorService is initialized
+    _ensure_monitor_service()
+    
     try:
-        # Cancel existing monitoring task if any
-        if chat_id in active_monitors:
-            active_monitors[chat_id].cancel()
-            del active_monitors[chat_id]
-
-        # Get bot instance
-        admin_bot = get_bot_instance()
+        # Start monitoring using the service
+        result = await monitor_service.start_monitoring(
+            user_id=user_id,
+            query=coin,
+            min_percentage=min_percentage,
+            filter_mode=filter_mode,
+            network=network,
+            pool_address=pool_address,
+            query_id=query_id
+        )
         
-        # Store the filter mode for this monitoring session
-        user_filter_preferences[chat_id] = filter_mode
-        logger.info(f"Saved filter mode {filter_mode} for chat_id {chat_id}")
-
-        # Get the display text for the filter mode
-        if filter_mode == "cex_only":
-            filter_mode_text = "CEX-CEX Only (no DEX)"
-        elif filter_mode == "cex_dex_only":
-            filter_mode_text = "ONLY CEX-DEX"
-        elif filter_mode == "future":
-            filter_mode_text = "DEX + CEX (ONLY FUTURE)"
-        else:
-            filter_mode_text = "CEX-CEX + DEX"
-        
-        logger.info(f"Final display text: {filter_mode_text} for filter mode: {filter_mode}")
-
-        # Prepare network and pool address info for display
-        dex_info = ""
-        if filter_mode in ["cex_dex_only", "future", "all"]:
-            dex_info = f"\nNetwork: {network}\nPool Address: {pool_address}"
-
-        # Send status message ONLY to the admin who initiated the command
-        await message.answer(f"🔍 Starting price monitoring for {coin} with minimum arbitrage of {min_percentage}%...\nFilter mode: {filter_mode_text}{dex_info}")
-
-        # Generate a unique query ID for this monitoring task
-        query_id = generate_query_id()
-        
-        # Use the handlers implementation for multi-coin support
-        try:
-            # Import what we need from handlers
-            from handlers.exchange_handlers import active_monitors as handler_active_monitors
-            from handlers.exchange_handlers import user_queries as handler_user_queries
-            from handlers.exchange_handlers import monitor_prices
+        if result["success"]:
+            # Get display text for the filter mode
+            mode_text = get_filter_mode_display_text(filter_mode)
             
-            # Set up the multi-coin monitoring (similar to what addcoin command does)
-            user_chat_id = message.chat.id
-            
-            # Store the query information
-            if user_chat_id not in handler_user_queries:
-                handler_user_queries[user_chat_id] = {}
+            # Prepare network and pool address info for display
+            dex_info = ""
+            if filter_mode in ["cex_dex_only", "future", "all"]:
+                dex_info = f"\nNetwork: {network}\nPool Address: {pool_address}"
                 
-            handler_user_queries[user_chat_id][query_id] = {
-                'query': coin, 
-                'min_percentage': min_percentage, 
-                'filter_mode': filter_mode,
-                'query_id': query_id,
-                'network': network,
-                'pool_address': pool_address
-            }
-            
-            # Start monitoring task using multi-coin implementation
-            task = asyncio.create_task(
-                monitor_prices(
-                    user_chat_id, 
-                    coin, 
-                    admin_bot, 
-                    min_percentage, 
-                    network=network, 
-                    pool_address=pool_address,
-                    query_id=query_id
-                )
-            )
-            
-            # Store the task in handler's active_monitors
-            if user_chat_id not in handler_active_monitors:
-                handler_active_monitors[user_chat_id] = {}
-                
-            handler_active_monitors[user_chat_id][query_id] = task
-            
-            # Do NOT set active_monitors[chat_id] = task as this would replace any existing monitors
-            # Instead, just add it to the alert group's active_monitors as a new entry
-            
-            # Success! Send confirmation message
+            # Send success message to the user
             await message.answer(
                 f"✅ Monitoring started for {coin} (Monitor ID: {query_id[:8]})!\n\n"
-                f"Filter mode: {filter_mode_text}{dex_info}\n"
+                f"Filter mode: {mode_text}{dex_info}\n"
                 f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
                 "Use /stop command with ID to stop specific monitoring or /stop_monitor to stop all.",
                 parse_mode=None
             )
-            
-        except ImportError:
-            # Fall back to the original implementation if handlers not available
-            logger.warning("Could not import handler implementation, falling back to original")
-            
-            # Start new monitoring task with the original implementation
-            task = asyncio.create_task(monitor_prices(chat_id, coin, admin_bot, min_percentage, network=network, pool_address=pool_address))
-            active_monitors[chat_id] = task
-    
-            # Send confirmation ONLY to the admin who initiated the command
-            await message.answer(
-                f"✅ Monitoring started for {coin}!\n\n"
-                f"Filter mode: {filter_mode_text}{dex_info}\n"
-                f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
-                "Use /stop_monitor command to stop monitoring.",
-                parse_mode=None
-            )
-
+        else:
+            await message.answer(f"❌ Error starting monitoring: {result['error']}")
     except Exception as e:
         logger.error(f"Error starting monitoring: {str(e)}", exc_info=True)
-        # Try to send error message to the user who initiated the command
         await message.answer(f"❌ Error starting monitoring: {str(e)}")
 
 @monitor_router.message(Command("stop"))
@@ -391,85 +300,48 @@ async def cmd_stop(message: Message):
         await message.answer("⚠️ Please specify a monitor ID.\nExample: /stop abc123\nUse /listcoins to see available monitors.", parse_mode=None)
         return
     
-    # Try to find the monitor in the handler implementation
-    try:
-        from handlers.exchange_handlers import active_monitors as handler_active_monitors
-        
-        found = False
-        
-        # Check each chat's monitors
-        for chat_id, monitors in handler_active_monitors.items():
-            for query_id, task in list(monitors.items()):
-                if query_id.startswith(monitor_id):
-                    # Found the monitor, stop it
-                    task.cancel()
-                    del handler_active_monitors[chat_id][query_id]
-                    
-                    # If no more monitors for this chat, remove the chat entry
-                    if not handler_active_monitors[chat_id]:
-                        del handler_active_monitors[chat_id]
-                    
-                    await message.answer(f"✅ Stopped monitoring for Monitor ID: {query_id[:8]}", parse_mode=None)
-                    
-                    # Also notify the alert group
-                    alert_group_id = ConfigManager.get_alert_group_id()
-                    topic_id = int(os.getenv("TOPIC_ID", "0"))
-                    bot = get_bot_instance()
-                    
-                    await bot.send_message(
-                        chat_id=alert_group_id,
-                        text=f"✅ Monitoring stopped for Monitor ID: {query_id[:8]}",
-                        message_thread_id=topic_id,
-                        parse_mode=None,
-                        disable_web_page_preview=True
-                    )
-                    
-                    found = True
-                    return
-        
-        if not found:
-            # If we're here, we couldn't find the monitor in the handler implementation
-            await message.answer(f"❌ No monitor found with ID: {monitor_id}", parse_mode=None)
-            # List available monitors to help the user
-            await cmd_list_coins(message)
+    # Ensure MonitorService is initialized
+    _ensure_monitor_service()
     
-    except (ImportError, AttributeError) as e:
-        logger.error(f"Error accessing handler implementation: {str(e)}")
-        await message.answer("❌ An error occurred trying to stop the monitor")
+    result = await monitor_service.stop_monitoring(monitor_id)
+    
+    if result["success"]:
+        await message.answer(f"✅ Stopped monitoring for Monitor ID: {result['query_id'][:8]}", parse_mode=None)
+        
+        # Also notify the alert group
+        alert_group_id = ConfigManager.get_alert_group_id()
+        topic_id = int(os.getenv("TOPIC_ID", "0"))
+        bot = get_bot_instance()
+        
+        await bot.send_message(
+            chat_id=alert_group_id,
+            text=f"✅ Monitoring stopped for Monitor ID: {result['query_id'][:8]}",
+            message_thread_id=topic_id,
+            parse_mode=None,
+            disable_web_page_preview=True
+        )
+    else:
+        await message.answer(f"❌ {result['error']}", parse_mode=None)
+        # List available monitors to help the user
+        await cmd_list_coins(message)
 
 @monitor_router.message(Command("stop_monitor"))
 async def cmd_stop_monitor(message: Message):
-    """Stop all monitoring (both implementations)"""
+    """Stop all monitoring tasks"""
     if message.from_user.id not in ConfigManager.get_admin_user_ids():
         await message.answer("⚠️ You don't have permission to use this command.")
         return
 
-    # Stop monitors from command implementation
-    chat_id = ConfigManager.get_alert_group_id()
-    stopped_count = 0
-
-    if chat_id in active_monitors:
-        active_monitors[chat_id].cancel()
-        del active_monitors[chat_id]
-        stopped_count += 1
+    # Ensure MonitorService is initialized
+    _ensure_monitor_service()
     
-    # Stop all monitors from handler implementation
-    from handlers.exchange_handlers import active_monitors as handler_monitors
-    handler_stopped = 0
-    
-    for user_id, monitors in list(handler_monitors.items()):
-        for query_id, task in list(monitors.items()):
-            task.cancel()
-        handler_stopped += len(monitors)
-        del handler_monitors[user_id]
-    
-    total_stopped = stopped_count + handler_stopped
+    result = await monitor_service.stop_all_monitoring()
     
     # Send "Monitoring stopped" message ONLY to the admin who initiated the command
-    await message.answer(f"✅ Monitoring stopped for all {total_stopped} coins")
+    await message.answer(f"✅ Monitoring stopped for all {result['count']} coins")
     
     # Also log the details
-    logger.info(f"Stopped {total_stopped} monitors ({stopped_count} from command impl, {handler_stopped} from handler impl)")
+    logger.info(f"Stopped {result['count']} monitors ({result['details']})")
 
 @monitor_router.message(Command("set_filter"))
 async def cmd_set_filter(message: Message):
@@ -485,30 +357,20 @@ async def cmd_set_filter(message: Message):
         await message.answer("❌ Please specify a valid filter mode. Example: /set_filter cex (for CEX-CEX only), /set_filter cex_dex (for ONLY CEX-DEX), or /set_filter all (for CEX+DEX)")
         return
 
+    # Ensure MonitorService is initialized
+    _ensure_monitor_service()
+    
     # Get the filter mode
-    if args[1].lower() == "cex":
-        filter_mode = "cex_only"
-    elif args[1].lower() == "cex_dex":
-        filter_mode = "cex_dex_only"
-    else:
-        filter_mode = "all"
+    filter_mode = monitor_service.parse_filter_mode_from_command(args[1].lower())
     
-    # Get the group ID where opportunities will be posted
-    chat_id = ConfigManager.get_alert_group_id()
+    # Set the filter mode using the service
+    monitor_service.set_global_filter_mode(filter_mode)
     
-    # Store the user's preference
-    user_filter_preferences[chat_id] = filter_mode
-    logger.info(f"Set filter mode for user {message.from_user.id} to {filter_mode}")
+    # Get display text for the filter mode
+    mode_text = get_filter_mode_display_text(filter_mode)
     
     # Send confirmation
-    if filter_mode == "cex_only":
-        filter_mode_text = "CEX-CEX Only (no DEX)"
-    elif filter_mode == "cex_dex_only":
-        filter_mode_text = "ONLY CEX-DEX"
-    else:
-        filter_mode_text = "CEX-CEX + DEX"
-    
-    await message.answer(f"✅ Filter mode set to: {filter_mode_text}")
+    await message.answer(f"✅ Filter mode set to: {mode_text}")
     
     # If user has a pending query, continue with appropriate next step
     if message.from_user.id in user_monitoring_setup:
@@ -525,20 +387,20 @@ async def cmd_set_filter(message: Message):
         if filter_mode in ["cex_dex_only", "all"]:
             user_monitoring_setup[message.from_user.id]["waiting_for"] = "network"
             await message.answer(
-                f"Coin: {coin}\nFilter mode: {filter_mode_text}\n\n"
+                f"Coin: {coin}\nFilter mode: {mode_text}\n\n"
                 f"For DEX operations, please enter the network name (e.g., Ethereum, BSC, Polygon)"
             )
         else:
             # For CEX-only mode, proceed to ask for minimum arbitrage percentage
             user_monitoring_setup[message.from_user.id]["waiting_for"] = "percentage"
             await message.answer(
-                f"Coin: {coin}\nFilter mode: {filter_mode_text}\n\n"
+                f"Coin: {coin}\nFilter mode: {mode_text}\n\n"
                 f"Please enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)"
             )
 
 @monitor_router.message(Command("addcoin"))
 async def cmd_add_coin(message: Message):
-    """Add a new coin to monitor - using the same flow as monitor command"""
+    """Add a new coin to monitor"""
     logger.info(f"Received /addcoin command from user {message.from_user.id}")
     if message.from_user.id not in ConfigManager.get_admin_user_ids():
         await message.answer("⚠️ You don't have permission to use this command.")
@@ -581,68 +443,18 @@ async def cmd_list_coins(message: Message):
         await message.answer("⚠️ You don't have permission to use this command.")
         return
     
-    # Check monitors from the admin bot implementation
-    alert_group_id = ConfigManager.get_alert_group_id()
-    admin_monitors = []
+    # Ensure MonitorService is initialized
+    _ensure_monitor_service()
     
-    if alert_group_id in active_monitors:
-        # For backward compatibility, the admin bot implementation only stores one monitor per alert group
-        coin = active_monitors[alert_group_id].get_name() if hasattr(active_monitors[alert_group_id], 'get_name') else "Unknown"
-        admin_monitors.append(f"• {coin}")
+    monitors = await monitor_service.list_all_monitors()
     
-    # Get monitors from the handlers implementation, if available
-    handler_monitors = []
-    try:
-        from handlers.exchange_handlers import active_monitors as handler_active_monitors
-        from handlers.exchange_handlers import user_queries as handler_user_queries
-        
-        for chat_id, monitors in handler_active_monitors.items():
-            for query_id, _ in monitors.items():
-                # Find the associated query information if available
-                query_info = "Unknown"
-                filter_mode = "all"
-                min_percentage = 0.1
-                
-                for chat_data in handler_user_queries.values():
-                    if query_id in chat_data:
-                        query_info = chat_data[query_id].get('query', 'Unknown')
-                        filter_mode = chat_data[query_id].get('filter_mode', 'all')
-                        min_percentage = chat_data[query_id].get('min_percentage', 0.1)
-                        break
-                
-                # Format the filter mode for display
-                if filter_mode == "dex_only":
-                    mode_text = "DEX Only"
-                elif filter_mode == "cex_only":
-                    mode_text = "CEX-CEX Only"
-                elif filter_mode == "cex_dex_only":
-                    mode_text = "CEX-DEX Only"
-                elif filter_mode == "future":
-                    mode_text = "Future Only"
-                else:
-                    mode_text = "All Types"
-                
-                # Escape the ID tag to prevent HTML parsing issues
-                handler_monitors.append(f"• {query_info} (Monitor ID: {query_id[:8]})\n  - {mode_text}\n  - Min: {min_percentage}%")
-    except (ImportError, AttributeError) as e:
-        logger.warning(f"Could not access handler monitors: {str(e)}")
-
     # Build the response message
-    if not admin_monitors and not handler_monitors:
+    if not monitors:
         await message.answer("⚠️ No coins are currently being monitored")
         return
     
     message_text = "🔍 Currently monitoring:\n\n"
-    
-    if admin_monitors:
-        message_text += "Admin Bot Monitors:\n"
-        message_text += "\n".join(admin_monitors)
-        message_text += "\n\n"
-    
-    if handler_monitors:
-        message_text += "Handler Bot Monitors:\n"
-        message_text += "\n\n".join(handler_monitors)
-        
+    message_text += "\n\n".join(monitors)
     message_text += "\n\nCommands:\n• /stop <code> - Stop a specific monitor\n• /stop_monitor - Stop all monitoring\n• /setmin <code> <percentage> - Set minimum %"
     
     await message.answer(message_text, parse_mode=None)
@@ -671,45 +483,22 @@ async def cmd_set_min_percentage(message: Message):
         await message.answer("❌ Invalid percentage value. Please enter a valid number")
         return
     
-    # Try to find the monitor in the handler implementation
-    try:
-        from handlers.exchange_handlers import active_monitors as handler_active_monitors
-        from handlers.exchange_handlers import user_queries as handler_user_queries
-        
-        found = False
-        
-        # Check each chat's monitors
-        for chat_id, monitors in handler_active_monitors.items():
-            for query_id, task in list(monitors.items()):
-                if query_id.startswith(monitor_id):
-                    # Found the monitor, pass to handler implementation
-                    from handlers.exchange_handlers import cmd_set_min_percentage as handler_setmin
-                    
-                    # We'll create a properly formatted message text with the original ID
-                    original_text = message.text
-                    message.text = f"/setmin {query_id} {min_percentage}"
-                    
-                    # Call the handler implementation
-                    await handler_setmin(message)
-                    
-                    # Restore the original message text
-                    message.text = original_text
-                    
-                    found = True
-                    return
-        
-        if not found:
-            # If we're here, we couldn't find the monitor in the handler implementation
-            # Check the admin bot implementation
-            alert_group_id = ConfigManager.get_alert_group_id()
-            if alert_group_id in active_monitors:
-                # For now, just notify that we can't set min percentage for the admin bot implementation
-                await message.answer("⚠️ Setmin is only supported for multi-coin monitors. Use /stop_monitor and /monitor again to set a new percentage.")
-            else:
-                await message.answer(f"❌ No monitor found with ID: {monitor_id}", parse_mode=None)
-                # List available monitors to help the user
-                await cmd_list_coins(message)
+    # Ensure MonitorService is initialized
+    _ensure_monitor_service()
     
-    except (ImportError, AttributeError) as e:
-        logger.error(f"Error accessing handler implementation: {str(e)}")
-        await message.answer("❌ An error occurred trying to set the minimum percentage") 
+    # Update the minimum percentage using the service
+    result = await monitor_service.update_min_percentage(monitor_id, min_percentage)
+    
+    if result["success"]:
+        await message.answer(f"✅ Minimum percentage for {result['query']} (ID: {result['query_id'][:8]}) set to {min_percentage}%")
+    else:
+        await message.answer(f"❌ {result['error']}")
+        # List available monitors to help the user
+        await cmd_list_coins(message)
+
+def _ensure_monitor_service():
+    """Ensure that the monitor service is initialized"""
+    global monitor_service
+    if monitor_service is None:
+        from services.monitor_service import MonitorService
+        monitor_service = MonitorService() 

@@ -16,9 +16,20 @@ import aiohttp
 import time
 import uuid  # Add import for UUID generation
 
+# Import the monitor service for shared state
+from services.monitor_service import MonitorService
+
+# Create a shared monitor service instance
+_monitor_service = MonitorService()
+
 # Global constants
 PRICE_CHECK_INTERVAL = 60  # seconds
 MIN_ARBITRAGE_PERCENTAGE = 0.1  # 0.1%
+
+# For backward compatibility, expose the service's variables
+active_monitors = _monitor_service.active_monitors  
+user_queries = _monitor_service.user_queries
+user_filter_preferences = _monitor_service.user_filter_preferences
 
 # Define a helper function for price formatting
 def format_price(price: float) -> str:
@@ -274,18 +285,18 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                             'percentage': cex_to_dex_percentage
                         })
     
-    # Compare all CEX combinations (always shown regardless of filter)
+    # Compare all CEX combinations
     for i in range(len(exchanges)):
-        # Skip CEX-CEX comparisons when in CEX-DEX only mode or future mode
-        if filter_mode == "cex_dex_only" or filter_mode == "future":
+        # Skip CEX-CEX comparisons when in CEX-DEX only mode
+        if filter_mode == "cex_dex_only":
             break
             
         for j in range(len(exchanges)):
             if i != j:
                 ex1, ex2 = exchanges[i], exchanges[j]
                 
-                # SPOT to SPOT between exchanges
-                if prices[ex1]['spot'] and prices[ex2]['spot']:
+                # SPOT to SPOT between exchanges - Skip in future mode
+                if prices[ex1]['spot'] and prices[ex2]['spot'] and filter_mode != "future":
                     price1, price2 = prices[ex1]['spot'], prices[ex2]['spot']
                     spread = abs(price2 - price1)
                     
@@ -320,8 +331,8 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                             'percentage': percentage2
                         })
                 
-                # FUTURES to FUTURES between exchanges
-                if prices[ex1]['futures'] and prices[ex2]['futures']:
+                # FUTURES to FUTURES between exchanges - Allow in future mode
+                if prices[ex1]['futures'] and prices[ex2]['futures'] and (filter_mode == "all" or filter_mode == "future"):
                     price1, price2 = prices[ex1]['futures'], prices[ex2]['futures']
                     spread = abs(price2 - price1)
                     
@@ -356,8 +367,8 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                             'percentage': percentage2
                         })
                 
-                # SPOT to FUTURES between exchanges
-                if prices[ex1]['spot'] and prices[ex2]['futures']:
+                # SPOT to FUTURES between exchanges - Allow in future mode
+                if prices[ex1]['spot'] and prices[ex2]['futures'] and (filter_mode == "all" or filter_mode == "future"):
                     spot_price = prices[ex1]['spot']
                     futures_price = prices[ex2]['futures']
                     spread = abs(futures_price - spot_price)
@@ -378,8 +389,8 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                             'percentage': percentage
                         })
                 
-                # FUTURES to SPOT between exchanges
-                if prices[ex1]['futures'] and prices[ex2]['spot']:
+                # FUTURES to SPOT between exchanges - Skip in future mode
+                if prices[ex1]['futures'] and prices[ex2]['spot'] and filter_mode != "future":
                     futures_price = prices[ex1]['futures']
                     spot_price = prices[ex2]['spot']
                     spread = abs(spot_price - futures_price)
@@ -400,8 +411,8 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                             'percentage': percentage
                         })
                 
-                # SPOT to FUTURES within same exchange
-                if prices[ex1]['spot'] and prices[ex1]['futures']:
+                # SPOT to FUTURES within same exchange - Allow in future mode
+                if prices[ex1]['spot'] and prices[ex1]['futures'] and (filter_mode == "all" or filter_mode == "future"):
                     spot_price = prices[ex1]['spot']
                     futures_price = prices[ex1]['futures']
                     spread = abs(futures_price - spot_price)
@@ -737,150 +748,10 @@ class ArbitragePriceMonitor:
                 # Start with the exchange name
                 price_message += f"<b>{exchange.upper()}</b>\n"
                 
-                # Get token availability status for Gate.io
-                if exchange == "gate":
-                    try:
-                        # Get token availability from Gate.io
-                        gate_client = exchange_service._get_exchange_client("gate")
-                        availability = await gate_client.check_token_availability(self.query)
-                        
-                        # Create status indicators for deposit and withdrawal
-                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
-                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
-                        
-                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
-                    except Exception as e:
-                        logger.error(f"Error getting token availability for {self.query} on Gate.io: {str(e)}")
-                
-                # Get token availability status for Binance
-                elif exchange == "binance":
-                    try:
-                        # Get token availability from Binance
-                        binance_client = exchange_service._get_exchange_client("binance")
-                        availability = await binance_client.check_token_availability(self.query)
-                        
-                        # Create status indicators for deposit and withdrawal
-                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
-                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
-                        
-                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
-                        
-                        # Try to get network information if available
-                        try:
-                            networks = await binance_client.get_currency_chains(self.query)
-                            if networks:
-                                price_message += "<b>Networks:</b> "
-                                network_names = [network_name for network_name, _ in networks]
-                                price_message += ", ".join(network_names) + "\n"
-                        except Exception as e:
-                            logger.error(f"Error getting network information for {self.query} on Binance: {str(e)}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error getting token availability for {self.query} on Binance: {str(e)}")
-                
-                # Get token availability status for Bitget
-                elif exchange == "bitget":
-                    try:
-                        # Get token availability from Bitget
-                        bitget_client = exchange_service._get_exchange_client("bitget")
-                        availability = await bitget_client.check_token_availability(self.query)
-                        
-                        # Create status indicators for deposit and withdrawal
-                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
-                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
-                        
-                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
-                        
-                        # Try to get network information if available
-                        try:
-                            networks = await bitget_client.get_currency_chains(self.query)
-                            if networks:
-                                price_message += "<b>Networks:</b> "
-                                network_names = [network_name for network_name, _ in networks]
-                                price_message += ", ".join(network_names) + "\n"
-                        except Exception as e:
-                            logger.error(f"Error getting network information for {self.query} on Bitget: {str(e)}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error getting token availability for {self.query} on Bitget: {str(e)}")
-                
-                # Get token availability status for MEXC
-                elif exchange == "mexc":
-                    try:
-                        # Get token availability from MEXC
-                        mexc_client = exchange_service._get_exchange_client("mexc")
-                        availability = await mexc_client.check_token_availability(self.query)
-                        
-                        # Create status indicators for deposit and withdrawal
-                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
-                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
-                        
-                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
-                        
-                        # Try to get network information if available
-                        try:
-                            networks = await mexc_client.get_currency_chains(self.query)
-                            if networks:
-                                price_message += "<b>Networks:</b> "
-                                network_names = [network_name for network_name, _ in networks]
-                                price_message += ", ".join(network_names) + "\n"
-                        except Exception as e:
-                            logger.error(f"Error getting network information for {self.query} on MEXC: {str(e)}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error getting token availability for {self.query} on MEXC: {str(e)}")
-                
-                # Get token availability status for ByBit
-                elif exchange == "bybit":
-                    try:
-                        # Get token availability from ByBit
-                        bybit_client = exchange_service._get_exchange_client("bybit")
-                        availability = await bybit_client.check_token_availability(self.query)
-                        
-                        # Create status indicators for deposit and withdrawal
-                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
-                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
-                        
-                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
-                        
-                        # Try to get network information if available
-                        try:
-                            networks = await bybit_client.get_currency_chains(self.query)
-                            if networks:
-                                price_message += "<b>Networks:</b> "
-                                network_names = [network_name for network_name, _ in networks]
-                                price_message += ", ".join(network_names) + "\n"
-                        except Exception as e:
-                            logger.error(f"Error getting network information for {self.query} on ByBit: {str(e)}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error getting token availability for {self.query} on ByBit: {str(e)}")
-                
-                # Get token availability status for BingX
-                elif exchange == "bingx":
-                    try:
-                        # Get token availability from BingX
-                        bingx_client = exchange_service._get_exchange_client("bingx")
-                        availability = await bingx_client.check_token_availability(self.query)
-                        
-                        # Create status indicators for deposit and withdrawal
-                        deposit_status = "✅" if availability.get("deposit", False) else "❌"
-                        withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
-                        
-                        price_message += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
-                        
-                        # Try to get network information if available
-                        try:
-                            networks = await bingx_client.get_currency_chains(self.query)
-                            if networks:
-                                price_message += "<b>Networks:</b> "
-                                network_names = [network_name for network_name, _ in networks]
-                                price_message += ", ".join(network_names) + "\n"
-                        except Exception as e:
-                            logger.error(f"Error getting network information for {self.query} on BingX: {str(e)}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error getting token availability for {self.query} on BingX: {str(e)}")
+                # Get and add token availability and network information
+                availability_info = await self._get_token_availability_info(exchange)
+                if availability_info:
+                    price_message += availability_info
                 
                 # Add spot price
                 if prices[exchange].get('spot'):
@@ -898,17 +769,87 @@ class ArbitragePriceMonitor:
         
         return price_message
     
+    async def _get_token_availability_info(self, exchange: str) -> Optional[str]:
+        """Get formatted token availability and network information for an exchange
+        
+        Args:
+            exchange: Exchange name (gate, bitget, bybit, mexc, bingx, binance)
+            
+        Returns:
+            Formatted string with availability and network info or None on error
+        """
+        try:
+            # Get the exchange client
+            client = exchange_service._get_exchange_client(exchange)
+            
+            # Get token availability
+            availability = await client.check_token_availability(self.query)
+            
+            # Format the result
+            result = ""
+            
+            # Create status indicators for deposit and withdrawal
+            deposit_status = "✅" if availability.get("deposit", False) else "❌"
+            withdrawal_status = "✅" if availability.get("withdrawal", False) else "❌"
+            
+            result += f"<b>Status:</b> Deposit: {deposit_status} | Withdrawal: {withdrawal_status}\n"
+            
+            # Try to get network information if available (excluding Gate.io which doesn't support this)
+            if exchange != "gate":
+                try:
+                    networks = await client.get_currency_chains(self.query)
+                    if networks:
+                        result += "<b>Networks:</b> "
+                        network_names = [network_name for network_name, _ in networks]
+                        result += ", ".join(network_names) + "\n"
+                except Exception as e:
+                    logger.error(f"Error getting network information for {self.query} on {exchange}: {str(e)}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting token availability for {self.query} on {exchange}: {str(e)}")
+            return None
+    
     async def _process_arbitrage_opportunities(self, prices: Dict[str, Dict[str, Any]]):
         """Process and alert about arbitrage opportunities"""
         # Calculate arbitrage opportunities with the filter mode
         opportunities = await calculate_arbitrage(prices, self.min_arbitrage_percentage, self.filter_mode)
         
-        # Filter significant opportunities (>= MIN_ARBITRAGE_PERCENTAGE) and exclude same-exchange opportunities
-        significant_opportunities = [
-            opp for opp in opportunities
-            if opp['percentage'] >= self.min_arbitrage_percentage and opp['type'] != 'same_exchange_spot_futures'
-        ]
-        
+        # Filter significant opportunities (>= MIN_ARBITRAGE_PERCENTAGE) and apply filter mode
+        significant_opportunities = []
+        for opp in opportunities:
+            # Basic filter: opportunity must meet minimum percentage
+            if opp['percentage'] < self.min_arbitrage_percentage:
+                continue
+                
+            # Filter by opportunity type based on filter mode
+            if self.filter_mode == "future":
+                # Only include futures-related opportunities
+                if not (opp['type'] == 'cross_exchange_futures' or 
+                        opp['type'] == 'cross_exchange_spot_futures' or
+                        opp['type'] == 'dex_to_cex_futures' or
+                        opp['type'] == 'cex_to_dex_futures' or
+                        opp['type'] == 'same_exchange_spot_futures'):
+                    continue
+            elif self.filter_mode == "cex_only":
+                # Only include CEX-CEX opportunities
+                if not (opp['type'] == 'cross_exchange_spot' or 
+                        opp['type'] == 'cross_exchange_futures' or
+                        opp['type'] == 'cross_exchange_spot_futures' or
+                        opp['type'] == 'cross_exchange_futures_spot'):
+                    continue
+            elif self.filter_mode == "cex_dex_only":
+                # Only include CEX-DEX opportunities
+                if not (opp['type'] == 'dex_to_cex_spot' or 
+                        opp['type'] == 'cex_to_dex_spot' or
+                        opp['type'] == 'dex_to_cex_futures' or
+                        opp['type'] == 'cex_to_dex_futures'):
+                    continue
+                
+            # Add opportunity to significant list
+            significant_opportunities.append(opp)
+            
         # Generate unique IDs for each opportunity
         current_opps = self._generate_opportunity_ids(significant_opportunities)
         
@@ -929,24 +870,11 @@ class ArbitragePriceMonitor:
                 # Skip same-exchange opportunities
                 if opp['type'] == 'same_exchange_spot_futures':
                     continue
-                    
-                opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
                 
-                # Add exchange-specific information to the ID based on opportunity type
-                if opp['type'] in ['dex_to_cex_spot', 'dex_to_cex_futures']:
-                    opp_id += f"_{opp['dex']}_{opp['cex']}"
-                elif opp['type'] in ['cex_to_dex_spot', 'cex_to_dex_futures']:
-                    opp_id += f"_{opp['cex']}_{opp['dex']}"
-                elif opp['type'] in ['cross_exchange_spot', 'cross_exchange_futures']:
-                    opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
-                elif opp['type'] == 'cross_exchange_spot_futures':
-                    opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
-                else:
-                    logger.warning(f"Unknown opportunity type: {opp['type']}")
-                    continue
-                    
-                current_opps.add(opp_id)
-                logger.debug(f"Added opportunity ID: {opp_id}")
+                opp_id = self._get_opportunity_id(opp)
+                if opp_id:
+                    current_opps.add(opp_id)
+                    logger.debug(f"Added opportunity ID: {opp_id}")
                 
             except KeyError as ke:
                 logger.error(f"Missing key in opportunity dict: {ke}", exc_info=True)
@@ -956,6 +884,34 @@ class ArbitragePriceMonitor:
                 logger.debug(f"Opportunity data: {opp}")
                 
         return current_opps
+    
+    def _get_opportunity_id(self, opp: Dict) -> str:
+        """Get a unique ID for an opportunity"""
+        # Skip same-exchange opportunities
+        if opp['type'] == 'same_exchange_spot_futures':
+            return ""
+            
+        # Base ID with type and percentage
+        opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
+        
+        # Add exchange-specific information to the ID based on opportunity type
+        try:
+            if opp['type'] in ['dex_to_cex_spot', 'dex_to_cex_futures']:
+                opp_id += f"_{opp['dex']}_{opp['cex']}"
+            elif opp['type'] in ['cex_to_dex_spot', 'cex_to_dex_futures']:
+                opp_id += f"_{opp['cex']}_{opp['dex']}"
+            elif opp['type'] in ['cross_exchange_spot', 'cross_exchange_futures']:
+                opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
+            elif opp['type'] == 'cross_exchange_spot_futures':
+                opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
+            else:
+                logger.warning(f"Unknown opportunity type: {opp['type']}")
+                return ""
+        except KeyError as ke:
+            logger.error(f"Missing key in opportunity dict: {ke}", exc_info=True)
+            return ""
+            
+        return opp_id
     
     async def _send_new_opportunity_alerts(self, opportunities: List[Dict], new_opps: Set[str]):
         """Send alerts for new arbitrage opportunities"""
@@ -976,25 +932,195 @@ class ArbitragePriceMonitor:
                 logger.error(f"Error processing opportunity alert: {str(e)}", exc_info=True)
                 logger.debug(f"Opportunity data: {opp}")
     
-    def _get_opportunity_id(self, opp: Dict) -> str:
-        """Get a unique ID for an opportunity - must match the logic in _generate_opportunity_ids"""
-        # Skip same-exchange opportunities
-        if opp['type'] == 'same_exchange_spot_futures':
-            return ""
+    def _format_opportunity_alert(self, opp: Dict, timestamp: str) -> Optional[str]:
+        """Format an alert message for a new arbitrage opportunity"""
+        try:
+            # Skip same-exchange opportunities
+            if opp['type'] == 'same_exchange_spot_futures':
+                logger.info(f"Skipping same-exchange opportunity for {opp['exchange']}")
+                return None
+                
+            # Create the base alert message
+            token_symbol = self.query.upper()
+            alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
             
-        opp_id = f"{opp['type']}_{opp['percentage']:.2f}"
+            # Format based on opportunity type
+            opportunity_formatters = {
+                'dex_to_cex_spot': self._format_dex_to_cex_opportunity,
+                'cex_to_dex_spot': self._format_cex_to_dex_opportunity,
+                'dex_to_cex_futures': self._format_dex_to_cex_futures_opportunity,
+                'cex_to_dex_futures': self._format_cex_to_dex_futures_opportunity,
+                'cross_exchange_spot': self._format_cross_exchange_opportunity,
+                'cross_exchange_futures': self._format_cross_exchange_futures_opportunity,
+                'cross_exchange_spot_futures': self._format_cross_exchange_spot_futures_opportunity
+            }
+            
+            # Get the appropriate formatter and generate the content
+            formatter = opportunity_formatters.get(opp['type'])
+            if formatter:
+                opportunity_content = formatter(opp, token_symbol)
+                if opportunity_content:
+                    alert_msg += opportunity_content
+                    return alert_msg
+            else:
+                logger.warning(f"Invalid or incomplete opportunity data: {opp}")
+                
+            return None
+                
+        except Exception as e:
+            logger.error(f"Error formatting alert message: {str(e)}", exc_info=True)
+            logger.debug(f"Opportunity data: {opp}")
+            return None
+            
+    def _format_dex_to_cex_opportunity(self, opp: Dict, token_symbol: str) -> Optional[str]:
+        """Format DEX to CEX Spot opportunity"""
+        if not all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+            return None
+            
+        cex_url = self._get_exchange_url(opp['cex'], 'spot', token_symbol)
+        dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
         
-        if opp['type'] in ['dex_to_cex_spot', 'dex_to_cex_futures']:
-            opp_id += f"_{opp['dex']}_{opp['cex']}"
-        elif opp['type'] in ['cex_to_dex_spot', 'cex_to_dex_futures']:
-            opp_id += f"_{opp['cex']}_{opp['dex']}"
-        elif opp['type'] in ['cross_exchange_spot', 'cross_exchange_futures']:
-            opp_id += f"_{opp['exchange1']}_{opp['exchange2']}"
-        elif opp['type'] == 'cross_exchange_spot_futures':
-            opp_id += f"_{opp['spot_exchange']}_{opp['futures_exchange']}"
+        dex_name = f"{opp['dex'].upper()} DEX"
+        if dex_url:
+            dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
+        
+        return (
+            f"💰 <b>Arbitrage Opportunity</b>\n"
+            f"Type: DEX -> CEX Spot\n"
+            f"Buy on: {dex_name} at ${format_price(opp['dex_price'])}\n"
+            f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${format_price(opp['cex_price'])}\n"
+            f"Difference: {opp['percentage']:.2f}%\n"
+            f"Profit potential: ${format_price(opp['spread'])}\n\n"
+        )
+        
+    def _format_cex_to_dex_opportunity(self, opp: Dict, token_symbol: str) -> Optional[str]:
+        """Format CEX to DEX Spot opportunity"""
+        if not all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+            return None
             
-        return opp_id
+        cex_url = self._get_exchange_url(opp['cex'], 'spot', token_symbol)
+        dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
+        
+        dex_name = f"{opp['dex'].upper()} DEX"
+        if dex_url:
+            dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
+        
+        return (
+            f"💰 <b>Arbitrage Opportunity</b>\n"
+            f"Type: CEX Spot -> DEX\n"
+            f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${format_price(opp['cex_price'])}\n"
+            f"Sell on: {dex_name} at ${format_price(opp['dex_price'])}\n"
+            f"Difference: {opp['percentage']:.2f}%\n"
+            f"Profit potential: ${format_price(opp['spread'])}\n\n"
+        )
+        
+    def _format_dex_to_cex_futures_opportunity(self, opp: Dict, token_symbol: str) -> Optional[str]:
+        """Format DEX to CEX Futures opportunity"""
+        if not all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+            return None
+            
+        cex_url = self._get_exchange_url(opp['cex'], 'futures', token_symbol)
+        dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
+        
+        dex_name = f"{opp['dex'].upper()} DEX"
+        if dex_url:
+            dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
+        
+        return (
+            f"💰 <b>Arbitrage Opportunity</b>\n"
+            f"Type: DEX -> CEX Futures\n"
+            f"Buy on: {dex_name} at ${format_price(opp['dex_price'])}\n"
+            f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${format_price(opp['cex_price'])}\n"
+            f"Difference: {opp['percentage']:.2f}%\n"
+            f"Profit potential: ${format_price(opp['spread'])}\n\n"
+        )
+        
+    def _format_cex_to_dex_futures_opportunity(self, opp: Dict, token_symbol: str) -> Optional[str]:
+        """Format CEX to DEX Futures opportunity"""
+        if not all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
+            return None
+            
+        cex_url = self._get_exchange_url(opp['cex'], 'futures', token_symbol)
+        dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
+        
+        dex_name = f"{opp['dex'].upper()} DEX"
+        if dex_url:
+            dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
+        
+        return (
+            f"💰 <b>Arbitrage Opportunity</b>\n"
+            f"Type: CEX Futures -> DEX\n"
+            f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${format_price(opp['cex_price'])}\n"
+            f"Sell on: {dex_name} at ${format_price(opp['dex_price'])}\n"
+            f"Difference: {opp['percentage']:.2f}%\n"
+            f"Profit potential: ${format_price(opp['spread'])}\n\n"
+        )
+        
+    def _format_cross_exchange_opportunity(self, opp: Dict, token_symbol: str) -> Optional[str]:
+        """Format Cross Exchange Spot opportunity"""
+        if not all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
+            return None
+            
+        exchange1_url = self._get_exchange_url(opp['exchange1'], 'spot', token_symbol)
+        exchange2_url = self._get_exchange_url(opp['exchange2'], 'spot', token_symbol)
+        
+        return (
+            f"💰 <b>Arbitrage Opportunity</b>\n"
+            f"Type: CEX Spot -> CEX Spot\n"
+            f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${format_price(opp['price1'])}\n"
+            f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${format_price(opp['price2'])}\n"
+            f"Difference: {opp['percentage']:.2f}%\n"
+            f"Profit potential: ${format_price(opp['spread'])}\n\n"
+        )
+        
+    def _format_cross_exchange_futures_opportunity(self, opp: Dict, token_symbol: str) -> Optional[str]:
+        """Format Cross Exchange Futures opportunity"""
+        if not all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
+            return None
+            
+        exchange1_url = self._get_exchange_url(opp['exchange1'], 'futures', token_symbol)
+        exchange2_url = self._get_exchange_url(opp['exchange2'], 'futures', token_symbol)
+        
+        return (
+            f"💰 <b>Arbitrage Opportunity</b>\n"
+            f"Type: CEX Futures -> CEX Futures\n"
+            f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${format_price(opp['price1'])}\n"
+            f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${format_price(opp['price2'])}\n"
+            f"Difference: {opp['percentage']:.2f}%\n"
+            f"Profit potential: ${format_price(opp['spread'])}\n\n"
+        )
+        
+    def _format_cross_exchange_spot_futures_opportunity(self, opp: Dict, token_symbol: str) -> Optional[str]:
+        """Format Cross Exchange Spot to Futures opportunity"""
+        if not all(k in opp for k in ['spot_exchange', 'futures_exchange', 'spot_price', 'futures_price', 'percentage']):
+            return None
+            
+        spot_url = self._get_exchange_url(opp['spot_exchange'], 'spot', token_symbol)
+        futures_url = self._get_exchange_url(opp['futures_exchange'], 'futures', token_symbol)
+        
+        return (
+            f"💰 <b>Arbitrage Opportunity</b>\n"
+            f"Type: CEX Spot -> CEX Futures\n"
+            f"Buy on: <a href='{spot_url}'>{opp['spot_exchange'].upper()}</a> (Spot) at ${format_price(opp['spot_price'])}\n"
+            f"Sell on: <a href='{futures_url}'>{opp['futures_exchange'].upper()}</a> (Futures) at ${format_price(opp['futures_price'])}\n"
+            f"Difference: {opp['percentage']:.2f}%\n"
+            f"Profit potential: ${format_price(opp['spread'])}\n\n"
+        )
     
+    async def _send_message(self, message: str):
+        """Send a message to the alert group"""
+        if message and len(message.strip()) > 0:
+            # Add query ID as a small reference at the end of the message
+            prefixed_message = f"{message}\n<i>Monitor ID: {self.query_id[:8]}</i>"
+            
+            await self.bot.send_message(
+                self.alert_group_id, 
+                prefixed_message, 
+                message_thread_id=self.topic_id,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+
     def _get_exchange_url(self, exchange: str, market_type: str, token_symbol: str) -> str:
         """
         Generate a URL for the given exchange, market type, and token symbol
@@ -1009,35 +1135,38 @@ class ArbitragePriceMonitor:
         """
         exchange = exchange.lower()
         
-        if market_type == 'spot':
-            if exchange == 'gate':
-                return f"https://www.gate.io/ru/trade/{token_symbol}_USDT"
-            elif exchange == 'bitget':
-                return f"https://www.bitget.com/ru/spot/{token_symbol}USDC"
-            elif exchange == 'bybit':
-                return f"https://www.bybit.com/ru-RU/trade/spot/{token_symbol}/USDT"
-            elif exchange == 'mexc':
-                return f"https://www.mexc.com/ru-RU/exchange/{token_symbol}_USDT?_from=search_spot_trade"
-            elif exchange == 'bingx':
-                return f"https://bingx.com/en/spot/{token_symbol}USDT/"
-            elif exchange == 'binance':
-                # Use Binance specific URL format for spot markets
-                return f"https://www.binance.com/en/trade/{token_symbol}_USDT?type=spot"
+        # URL templates for different exchanges
+        url_templates = {
+            'gate': {
+                'spot': "https://www.gate.io/ru/trade/{symbol}_USDT",
+                'futures': "https://www.gate.io/ru/futures/USDT/{symbol}_USDT"
+            },
+            'bitget': {
+                'spot': "https://www.bitget.com/ru/spot/{symbol}USDC",
+                'futures': "https://www.bitget.com/ru/futures/usdt/{symbol}USDT"
+            },
+            'bybit': {
+                'spot': "https://www.bybit.com/ru-RU/trade/spot/{symbol}/USDT",
+                'futures': "https://www.bybit.com/trade/usdt/{symbol}USDT"
+            },
+            'mexc': {
+                'spot': "https://www.mexc.com/ru-RU/exchange/{symbol}_USDT?_from=search_spot_trade",
+                'futures': "https://futures.mexc.com/ru-RU/exchange/{symbol}_USDT?type=linear_swap"
+            },
+            'bingx': {
+                'spot': "https://bingx.com/en/spot/{symbol}USDT/",
+                'futures': "https://bingx.com/en/perpetual/{symbol}-USDT/"
+            },
+            'binance': {
+                'spot': "https://www.binance.com/en/trade/{symbol}_USDT?type=spot",
+                'futures': "https://www.binance.com/en/futures/{symbol}USDT"
+            }
+        }
         
-        elif market_type == 'futures':
-            if exchange == 'gate':
-                return f"https://www.gate.io/ru/futures/USDT/{token_symbol}_USDT"
-            elif exchange == 'bitget':
-                return f"https://www.bitget.com/ru/futures/usdt/{token_symbol}USDT"
-            elif exchange == 'bybit':
-                return f"https://www.bybit.com/trade/usdt/{token_symbol}USDT"
-            elif exchange == 'mexc':
-                return f"https://futures.mexc.com/ru-RU/exchange/{token_symbol}_USDT?type=linear_swap"
-            elif exchange == 'bingx':
-                return f"https://bingx.com/en/perpetual/{token_symbol}-USDT/"
-            elif exchange == 'binance':
-                # Use Binance specific URL format for futures markets
-                return f"https://www.binance.com/en/futures/{token_symbol}USDT"
+        # Get the template for the specified exchange and market type
+        if exchange in url_templates and market_type in url_templates[exchange]:
+            template = url_templates[exchange][market_type]
+            return template.format(symbol=token_symbol)
         
         # Default fallback - return empty string if no match
         return ""
@@ -1056,156 +1185,21 @@ class ArbitragePriceMonitor:
         if not pool_address:
             return ""
             
-        # Default to BASE chain for now, but this could be enhanced to support multiple chains
-        return f"https://www.dextools.io/app/en/{dex_name}/pair-explorer/{pool_address}"
-    
-    def _format_opportunity_alert(self, opp: Dict, timestamp: str) -> Optional[str]:
-        """Format an alert message for a new arbitrage opportunity"""
-        try:
-            # Skip same-exchange opportunities
-            if opp['type'] == 'same_exchange_spot_futures':
-                logger.info(f"Skipping same-exchange opportunity for {opp['exchange']}")
-                return None
-                
-            alert_msg = f"🚨 New Arbitrage Opportunity at {timestamp}!\n\n"
+        # Chain mapping
+        dex_chains = {
+            'BASEEVM': 'base',
+            'ETH': 'ether',
+            'BSC': 'bsc',
+            'MATIC': 'polygon',
+            'ARBEVM': 'arbitrum',
+            'OPTIMISM': 'optimism',
+            'AVAX': 'avalanche'
+        }
+        
+        # Use the mapped chain name if available, otherwise use the original name
+        chain = dex_chains.get(dex_name.upper(), dex_name.lower())
             
-            # Extract token symbol from the query
-            token_symbol = self.query.upper()
-            
-            # DEX to CEX Spot
-            if opp['type'] == 'dex_to_cex_spot' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
-                cex_url = self._get_exchange_url(opp['cex'], 'spot', token_symbol)
-                dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
-                
-                dex_name = f"{opp['dex'].upper()} DEX"
-                if dex_url:
-                    dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
-                
-                alert_msg += (
-                    f"💰 <b>Arbitrage Opportunity</b>\n"
-                    f"Type: DEX -> CEX Spot\n"
-                    f"Buy on: {dex_name} at ${format_price(opp['dex_price'])}\n"
-                    f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${format_price(opp['cex_price'])}\n"
-                    f"Difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
-                )
-            
-            # CEX to DEX Spot
-            elif opp['type'] == 'cex_to_dex_spot' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
-                cex_url = self._get_exchange_url(opp['cex'], 'spot', token_symbol)
-                dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
-                
-                dex_name = f"{opp['dex'].upper()} DEX"
-                if dex_url:
-                    dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
-                
-                alert_msg += (
-                    f"💰 <b>Arbitrage Opportunity</b>\n"
-                    f"Type: CEX Spot -> DEX\n"
-                    f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> at ${format_price(opp['cex_price'])}\n"
-                    f"Sell on: {dex_name} at ${format_price(opp['dex_price'])}\n"
-                    f"Difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
-                )
-            
-            # DEX to CEX Futures
-            elif opp['type'] == 'dex_to_cex_futures' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
-                cex_url = self._get_exchange_url(opp['cex'], 'futures', token_symbol)
-                dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
-                
-                dex_name = f"{opp['dex'].upper()} DEX"
-                if dex_url:
-                    dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
-                
-                alert_msg += (
-                    f"💰 <b>Arbitrage Opportunity</b>\n"
-                    f"Type: DEX -> CEX Futures\n"
-                    f"Buy on: {dex_name} at ${format_price(opp['dex_price'])}\n"
-                    f"Sell on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${format_price(opp['cex_price'])}\n"
-                    f"Difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
-                )
-            
-            # CEX to DEX Futures
-            elif opp['type'] == 'cex_to_dex_futures' and all(k in opp for k in ['dex', 'cex', 'dex_price', 'cex_price', 'percentage']):
-                cex_url = self._get_exchange_url(opp['cex'], 'futures', token_symbol)
-                dex_url = self._get_dextools_url(opp['dex'], self.pool_address)
-                
-                dex_name = f"{opp['dex'].upper()} DEX"
-                if dex_url:
-                    dex_name = f"<a href='{dex_url}'>{dex_name}</a>"
-                
-                alert_msg += (
-                    f"💰 <b>Arbitrage Opportunity</b>\n"
-                    f"Type: CEX Futures -> DEX\n"
-                    f"Buy on: <a href='{cex_url}'>{opp['cex'].upper()}</a> Futures at ${format_price(opp['cex_price'])}\n"
-                    f"Sell on: {dex_name} at ${format_price(opp['dex_price'])}\n"
-                    f"Difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
-                )
-            
-            # CEX to CEX Spot
-            elif opp['type'] == 'cross_exchange_spot' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
-                exchange1_url = self._get_exchange_url(opp['exchange1'], 'spot', token_symbol)
-                exchange2_url = self._get_exchange_url(opp['exchange2'], 'spot', token_symbol)
-                alert_msg += (
-                    f"💰 <b>Arbitrage Opportunity</b>\n"
-                    f"Type: CEX Spot -> CEX Spot\n"
-                    f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${format_price(opp['price1'])}\n"
-                    f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${format_price(opp['price2'])}\n"
-                    f"Difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
-                )
-            
-            # CEX to CEX Futures
-            elif opp['type'] == 'cross_exchange_futures' and all(k in opp for k in ['exchange1', 'exchange2', 'price1', 'price2', 'percentage']):
-                exchange1_url = self._get_exchange_url(opp['exchange1'], 'futures', token_symbol)
-                exchange2_url = self._get_exchange_url(opp['exchange2'], 'futures', token_symbol)
-                alert_msg += (
-                    f"💰 <b>Arbitrage Opportunity</b>\n"
-                    f"Type: CEX Futures -> CEX Futures\n"
-                    f"Buy on: <a href='{exchange1_url}'>{opp['exchange1'].upper()}</a> at ${format_price(opp['price1'])}\n"
-                    f"Sell on: <a href='{exchange2_url}'>{opp['exchange2'].upper()}</a> at ${format_price(opp['price2'])}\n"
-                    f"Difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
-                )
-            
-            # CEX Spot to CEX Futures (Cross-exchange)
-            elif opp['type'] == 'cross_exchange_spot_futures' and all(k in opp for k in ['spot_exchange', 'futures_exchange', 'spot_price', 'futures_price', 'percentage']):
-                spot_url = self._get_exchange_url(opp['spot_exchange'], 'spot', token_symbol)
-                futures_url = self._get_exchange_url(opp['futures_exchange'], 'futures', token_symbol)
-                alert_msg += (
-                    f"💰 <b>Arbitrage Opportunity</b>\n"
-                    f"Type: CEX Spot -> CEX Futures\n"
-                    f"Buy on: <a href='{spot_url}'>{opp['spot_exchange'].upper()}</a> (Spot) at ${format_price(opp['spot_price'])}\n"
-                    f"Sell on: <a href='{futures_url}'>{opp['futures_exchange'].upper()}</a> (Futures) at ${format_price(opp['futures_price'])}\n"
-                    f"Difference: {opp['percentage']:.2f}%\n"
-                    f"Profit potential: ${format_price(opp['spread'])}\n\n"
-                )
-            else:
-                logger.warning(f"Invalid or incomplete opportunity data: {opp}")
-                return None
-                
-            return alert_msg
-                
-        except Exception as e:
-            logger.error(f"Error formatting alert message: {str(e)}", exc_info=True)
-            logger.debug(f"Opportunity data: {opp}")
-            return None
-    
-    async def _send_message(self, message: str):
-        """Send a message to the alert group"""
-        if message and len(message.strip()) > 0:
-            # Add query ID as a small reference at the end of the message
-            prefixed_message = f"{message}\n<i>Monitor ID: {self.query_id[:8]}</i>"
-            
-            await self.bot.send_message(
-                self.alert_group_id, 
-                prefixed_message, 
-                message_thread_id=self.topic_id,
-                parse_mode="HTML",
-                disable_web_page_preview=True
-            )
+        return f"https://www.dextools.io/app/en/{chain}/pair-explorer/{pool_address}"
 
 @router.message(Command("stop"))
 async def cmd_stop(message: Message):
