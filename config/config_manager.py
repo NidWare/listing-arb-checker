@@ -7,17 +7,15 @@ class ConfigManager:
 
     @staticmethod
     def get_bot_token() -> str:
-        token = os.getenv('BOT_TOKEN')
-        if not token:
-            raise ValueError("BOT_TOKEN not found in environment variables")
-        return token
-
-    @staticmethod
-    def get_admin_bot_token() -> str:
         token = os.getenv('ADMIN_BOT_TOKEN')
         if not token:
             raise ValueError("ADMIN_BOT_TOKEN not found in environment variables")
         return token
+
+    @staticmethod
+    def get_admin_bot_token() -> str:
+        # Redirect to get_bot_token for backward compatibility
+        return ConfigManager.get_bot_token()
 
     @staticmethod
     def get_alert_group_id() -> int:

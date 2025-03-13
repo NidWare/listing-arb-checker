@@ -246,7 +246,7 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
                             logger.info(f"Skipping CEX->DEX Spot opportunity in future mode")
                 
                 # DEX to CEX Futures
-                if prices[ex]['futures'] and (filter_mode == "all" or filter_mode == "future"):
+                if prices[ex]['futures'] and (filter_mode == "all" or filter_mode == "future" or filter_mode == "cex_dex_only"):
                     cex_futures_price = prices[ex]['futures']
                     spread = abs(cex_futures_price - dex_price)
                     

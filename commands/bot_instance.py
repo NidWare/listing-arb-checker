@@ -1,11 +1,11 @@
 from aiogram import Bot
 
-# This will be set in admin_bot.py
-admin_bot = None
+# This will be set in bot.py
+bot = None
 
 def set_bot_instance(bot_instance):
-    global admin_bot
-    admin_bot = bot_instance
+    global bot
+    bot = bot_instance
     
 def get_bot_instance():
-    return admin_bot 
+    return bot 
