@@ -470,7 +470,6 @@ async def cmd_stop(message: Message):
 async def cmd_stop_monitor(message: Message):
     """Stop all monitoring tasks"""
     if message.from_user.id not in ConfigManager.get_admin_user_ids():
-        await message.answer("⚠️ You don't have permission to use this command.")
         return
 
     # Ensure MonitorService is initialized
