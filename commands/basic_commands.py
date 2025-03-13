@@ -25,7 +25,7 @@ async def cmd_start(message: Message):
             "/setmin [code] [percentage] - Set minimum arbitrage %\n"
         )
     else:
-        await message.answer("⚠️ You don't have permission to use this bot.")
+        return
 
 @basic_router.message(Command("stats"))
 async def cmd_stats(message: Message):
@@ -54,7 +54,7 @@ async def cmd_stats(message: Message):
             "- Uptime: Active"
         )
     else:
-        await message.answer("⚠️ You don't have permission to use this command.")
+        return
 
 # We need to make sure this catch-all handler doesn't interfere with other command handlers
 # To do that, we'll check if the message starts with a command prefix and ignore it
