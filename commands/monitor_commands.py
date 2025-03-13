@@ -75,6 +75,23 @@ def get_network_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(2)
     return builder.as_markup()
 
+def get_deposit_withdrawal_check_keyboard() -> InlineKeyboardMarkup:
+    """Create a keyboard for selecting deposit/withdrawal check setting"""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(
+        text="Yes (More Accurate)",
+        callback_data="deposit_check_yes"
+    )
+    
+    builder.button(
+        text="No (Faster Alerts)",
+        callback_data="deposit_check_no"
+    )
+    
+    builder.adjust(1)
+    return builder.as_markup()
+
 def get_filter_mode_display_text(filter_mode: str) -> str:
     """Convert filter mode to human-readable text"""
     if filter_mode == "cex_only":
@@ -156,13 +173,16 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
         # Mark that we're waiting for network input
         user_monitoring_setup[user_id]["waiting_for"] = "network"
     else:
-        # For CEX-only mode, proceed to ask for minimum arbitrage percentage
+        # For CEX-only mode, proceed to ask about deposit/withdrawal checks
+        deposit_check_keyboard = get_deposit_withdrawal_check_keyboard()
         await callback.message.answer(
             f"Coin: {coin}\nFilter mode: {mode_text}\n\n"
-            f"Step 2/2: Please enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)"
+            f"Would you like to enforce deposit/withdrawal checks?\n"
+            f"This makes alerts more accurate but might be slower:",
+            reply_markup=deposit_check_keyboard
         )
-        # Mark that we're waiting for percentage input
-        user_monitoring_setup[user_id]["waiting_for"] = "percentage"
+        # Mark that we're waiting for deposit check input
+        user_monitoring_setup[user_id]["waiting_for"] = "deposit_check"
 
 @monitor_router.callback_query(F.data.startswith("network_"))
 async def handle_network_callback(callback: CallbackQuery):
@@ -222,6 +242,59 @@ async def handle_network_callback(callback: CallbackQuery):
         f"Now, please enter the pool address for {coin} on {network_display}"
     )
 
+@monitor_router.callback_query(F.data.startswith("deposit_check_"))
+async def handle_deposit_check_callback(callback: CallbackQuery):
+    """Handle deposit/withdrawal check selection"""
+    user_id = callback.from_user.id
+    
+    logger.info(f"Received deposit check callback from user {user_id}: {callback.data}")
+    
+    # Check if user is admin
+    if user_id not in ConfigManager.get_admin_user_ids():
+        logger.warning(f"Non-admin user {user_id} attempted to set deposit check")
+        await callback.answer("Only admins can change this setting", show_alert=True)
+        return
+    
+    # Check if user has an active setup
+    if user_id not in user_monitoring_setup:
+        await callback.answer("No active monitoring setup found. Please use /addcoin command first.", show_alert=True)
+        return
+    
+    # Check if user is waiting for deposit check input
+    if user_monitoring_setup[user_id].get("waiting_for") != "deposit_check":
+        await callback.answer("Unexpected deposit check selection", show_alert=True)
+        return
+    
+    # Extract deposit check setting from callback data
+    deposit_check = callback.data == "deposit_check_yes"
+    
+    # Store the setting in the user's setup
+    user_monitoring_setup[user_id]["enforce_deposit_withdrawal_checks"] = deposit_check
+    user_monitoring_setup[user_id]["waiting_for"] = "percentage"
+    
+    # Get the stored coin and other information for display
+    coin = user_monitoring_setup[user_id]["coin"]
+    filter_mode = user_monitoring_setup[user_id]["filter_mode"]
+    mode_text = get_filter_mode_display_text(filter_mode)
+    
+    # Prepare other information for display
+    additional_info = ""
+    if filter_mode in ["cex_dex_only", "future", "all"]:
+        network = user_monitoring_setup[user_id]["network"]
+        pool_address = user_monitoring_setup[user_id]["pool_address"]
+        additional_info = f"\nNetwork: {network}\nPool Address: {pool_address}"
+    
+    # Always answer the callback to prevent the "loading" state
+    check_status = "Enabled" if deposit_check else "Disabled"
+    await callback.answer(f"Deposit/Withdrawal Checks: {check_status}")
+    
+    # Ask for minimum percentage
+    await callback.message.answer(
+        f"Coin: {coin}\nFilter mode: {mode_text}{additional_info}\n"
+        f"Deposit/Withdrawal Checks: {check_status}\n\n"
+        f"Finally, please enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)"
+    )
+
 @monitor_router.message(Command("cancel"))
 async def cmd_cancel(message: Message):
     """Cancel the current monitoring setup process"""
@@ -244,7 +317,6 @@ async def handle_min_percentage(message: Message):
     user_id = message.from_user.id
     
     if user_id not in ConfigManager.get_admin_user_ids():
-        await message.answer("⚠️ You don't have permission to use this command.")
         return
     
     # Get the user's setup data
@@ -271,15 +343,19 @@ async def handle_min_percentage(message: Message):
     if waiting_for == "pool_address":
         pool_address = message.text.strip()
         setup_data["pool_address"] = pool_address
-        setup_data["waiting_for"] = "percentage"
+        setup_data["waiting_for"] = "deposit_check"
         
         # Get network for display
         network = setup_data["network"]
         
+        # Show deposit/withdrawal check selection keyboard
+        deposit_check_keyboard = get_deposit_withdrawal_check_keyboard()
         await message.answer(
             f"Pool address: {pool_address}\n"
             f"Network: {network}\n\n"
-            f"Finally, please enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)"
+            f"Would you like to enforce deposit/withdrawal checks?\n"
+            f"This makes alerts more accurate but might be slower:",
+            reply_markup=deposit_check_keyboard
         )
         return
     
@@ -311,6 +387,7 @@ async def handle_min_percentage(message: Message):
     # Store setup data for use in monitoring
     network = setup_data.get("network")
     pool_address = setup_data.get("pool_address")
+    enforce_deposit_withdrawal_checks = setup_data.get("enforce_deposit_withdrawal_checks", False)
     
     # Generate a unique query ID
     query_id = str(uuid.uuid4())
@@ -331,7 +408,8 @@ async def handle_min_percentage(message: Message):
             filter_mode=filter_mode,
             network=network,
             pool_address=pool_address,
-            query_id=query_id
+            query_id=query_id,
+            enforce_deposit_withdrawal_checks=enforce_deposit_withdrawal_checks
         )
         
         if result["success"]:
@@ -342,11 +420,15 @@ async def handle_min_percentage(message: Message):
             dex_info = ""
             if filter_mode in ["cex_dex_only", "future", "all"]:
                 dex_info = f"\nNetwork: {network}\nPool Address: {pool_address}"
+            
+            # Add deposit/withdrawal check info
+            check_status = "Enabled" if enforce_deposit_withdrawal_checks else "Disabled"
                 
             # Send success message to the user
             await message.answer(
                 f"✅ Monitoring started for {coin} (Monitor ID: {query_id[:8]})!\n\n"
                 f"Filter mode: {mode_text}{dex_info}\n"
+                f"Deposit/Withdrawal Checks: {check_status}\n"
                 f"I will notify you when there are arbitrage opportunities with >{min_percentage}% difference.\n"
                 "Use /stop command with ID to stop specific monitoring or /stop_monitor to stop all.",
                 parse_mode=None
@@ -454,11 +536,14 @@ async def cmd_set_filter(message: Message):
                 reply_markup=network_keyboard
             )
         else:
-            # For CEX-only mode, proceed to ask for minimum arbitrage percentage
-            user_monitoring_setup[message.from_user.id]["waiting_for"] = "percentage"
+            # For CEX-only mode, proceed to ask about deposit/withdrawal checks
+            user_monitoring_setup[message.from_user.id]["waiting_for"] = "deposit_check"
+            deposit_check_keyboard = get_deposit_withdrawal_check_keyboard()
             await message.answer(
                 f"Coin: {coin}\nFilter mode: {mode_text}\n\n"
-                f"Please enter the minimum arbitrage percentage (e.g., 0.5 for 0.5%)"
+                f"Would you like to enforce deposit/withdrawal checks?\n"
+                f"This makes alerts more accurate but might be slower:",
+                reply_markup=deposit_check_keyboard
             )
 
 @monitor_router.message(Command("addcoin"))

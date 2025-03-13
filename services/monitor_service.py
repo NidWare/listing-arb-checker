@@ -40,7 +40,7 @@ class MonitorService:
         else:
             return "all"
             
-    async def start_monitoring(self, user_id, query, bot, min_percentage, filter_mode, network=None, pool_address=None, query_id=None):
+    async def start_monitoring(self, user_id, query, bot, min_percentage, filter_mode, network=None, pool_address=None, query_id=None, enforce_deposit_withdrawal_checks=False):
         """
         Start monitoring a crypto asset for arbitrage opportunities
         
@@ -53,6 +53,7 @@ class MonitorService:
             network: Optional network for DEX operations
             pool_address: Optional pool address for DEX operations
             query_id: Optional query ID (generated if not provided)
+            enforce_deposit_withdrawal_checks: Whether to enforce deposit/withdrawal checks
             
         Returns:
             dict: Result with success status and monitoring details
@@ -77,7 +78,8 @@ class MonitorService:
                 'min_percentage': min_percentage,
                 'filter_mode': filter_mode,
                 'network': network,
-                'pool_address': pool_address
+                'pool_address': pool_address,
+                'enforce_deposit_withdrawal_checks': enforce_deposit_withdrawal_checks
             }
             
             # Store filter preference for this user
@@ -108,7 +110,8 @@ class MonitorService:
                     network, 
                     pool_address, 
                     query_id,
-                    filter_mode  # Explicitly pass the filter_mode
+                    filter_mode,  # Explicitly pass the filter_mode
+                    enforce_deposit_withdrawal_checks  # Pass the deposit/withdrawal check parameter
                 )
             )
             

@@ -174,6 +174,158 @@ async def cmd_chat_info(message: Message):
 
 async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min_arbitrage_percentage: float = MIN_ARBITRAGE_PERCENTAGE, filter_mode: str = "all") -> List[Dict]:
     """Calculate all possible arbitrage opportunities between exchanges and DEX"""
+    # Helper functions to improve readability and reduce duplication
+    def calc_percentage(buy_price: float, sell_price: float) -> float:
+        """Calculate percentage difference between prices"""
+        return ((sell_price - buy_price) / buy_price) * 100
+    
+    def should_include_opportunity_type(opp_type: str, filter_mode: str) -> bool:
+        """Determine if opportunity type should be included based on filter mode"""
+        if filter_mode == "all":
+            return True
+            
+        if filter_mode == "cex_only":
+            return not opp_type.startswith("dex_") and not "dex" in opp_type
+            
+        if filter_mode == "cex_dex_only":
+            return "dex" in opp_type
+            
+        if filter_mode == "future":
+            return (
+                "futures" in opp_type or
+                opp_type == "cross_exchange_futures" or
+                opp_type == "dex_to_cex_futures" or
+                opp_type == "cex_to_dex_futures"
+            )
+            
+        logger.warning(f"Unknown filter mode: {filter_mode}")
+        return True  # Default to including all opportunities
+    
+    def create_opportunity(opp_type: str, source: str, target: str, source_price: float, 
+                          target_price: float, percentage: float, **extra_fields) -> Dict:
+        """Create a standardized opportunity dictionary"""
+        spread = abs(target_price - source_price)
+        opportunity = {
+            'type': opp_type,
+            'spread': spread,
+            'percentage': percentage,
+            **extra_fields
+        }
+        return opportunity
+    
+    def create_dex_cex_opportunity(direction: str, dex: str, cex: str, dex_price: float, cex_price: float) -> Optional[Dict]:
+        """Process DEX-CEX arbitrage opportunities in either direction"""
+        if direction == "dex_to_cex_spot":
+            percentage = calc_percentage(dex_price, cex_price)
+            if percentage >= min_arbitrage_percentage:
+                logger.info(f"Found DEX->CEX Spot opportunity with {percentage:.2f}%")
+                if not should_include_opportunity_type("dex_to_cex_spot", filter_mode):
+                    logger.info(f"Skipping DEX->CEX Spot opportunity due to filter mode {filter_mode}")
+                    return None
+                return create_opportunity('dex_to_cex_spot', dex, cex, dex_price, cex_price, percentage,
+                                         dex=dex, cex=cex, dex_price=dex_price, cex_price=cex_price)
+                                         
+        elif direction == "cex_to_dex_spot":
+            percentage = calc_percentage(cex_price, dex_price)
+            if percentage >= min_arbitrage_percentage:
+                logger.info(f"Found CEX->DEX Spot opportunity with {percentage:.2f}%")
+                if not should_include_opportunity_type("cex_to_dex_spot", filter_mode):
+                    logger.info(f"Skipping CEX->DEX Spot opportunity due to filter mode {filter_mode}")
+                    return None
+                return create_opportunity('cex_to_dex_spot', cex, dex, cex_price, dex_price, percentage,
+                                         dex=dex, cex=cex, dex_price=dex_price, cex_price=cex_price)
+        
+        elif direction == "dex_to_cex_futures":
+            percentage = calc_percentage(dex_price, cex_price)
+            if percentage >= min_arbitrage_percentage:
+                logger.info(f"Found DEX->CEX Futures opportunity with {percentage:.2f}%")
+                if not should_include_opportunity_type("dex_to_cex_futures", filter_mode):
+                    logger.info(f"Skipping DEX->CEX Futures opportunity due to filter mode {filter_mode}")
+                    return None
+                return create_opportunity('dex_to_cex_futures', dex, cex, dex_price, cex_price, percentage,
+                                         dex=dex, cex=cex, dex_price=dex_price, cex_price=cex_price)
+                                         
+        elif direction == "cex_to_dex_futures":
+            percentage = calc_percentage(cex_price, dex_price) 
+            if percentage >= min_arbitrage_percentage:
+                logger.info(f"Found CEX->DEX Futures opportunity with {percentage:.2f}%")
+                if not should_include_opportunity_type("cex_to_dex_futures", filter_mode):
+                    logger.info(f"Skipping CEX->DEX Futures opportunity due to filter mode {filter_mode}")
+                    return None
+                return create_opportunity('cex_to_dex_futures', cex, dex, cex_price, dex_price, percentage,
+                                         dex=dex, cex=cex, dex_price=dex_price, cex_price=cex_price)
+        
+        return None
+    
+    def create_cross_exchange_opportunity(market_type: str, ex1: str, ex2: str, price1: float, price2: float) -> List[Dict]:
+        """Process cross-exchange arbitrage opportunities in both directions"""
+        results = []
+        
+        # Check ex1 -> ex2 direction
+        percentage1 = calc_percentage(price1, price2)
+        logger.debug(f"CEX {market_type} {ex1}->{ex2}: {format_price(price1)}->{format_price(price2)} = {percentage1:.2f}%")
+        
+        # Check ex2 -> ex1 direction
+        percentage2 = calc_percentage(price2, price1)
+        logger.debug(f"CEX {market_type} {ex2}->{ex1}: {format_price(price2)}->{format_price(price1)} = {percentage2:.2f}%")
+        
+        opp_type = f"cross_exchange_{market_type.lower()}"
+        if percentage1 >= min_arbitrage_percentage and should_include_opportunity_type(opp_type, filter_mode):
+            logger.info(f"Found CEX->CEX {market_type} opportunity: {ex1}->{ex2} with {percentage1:.2f}%")
+            results.append(create_opportunity(
+                opp_type, ex1, ex2, price1, price2, percentage1,
+                exchange1=ex1, exchange2=ex2, price1=price1, price2=price2
+            ))
+            
+        if percentage2 >= min_arbitrage_percentage and should_include_opportunity_type(opp_type, filter_mode):
+            logger.info(f"Found CEX->CEX {market_type} opportunity: {ex2}->{ex1} with {percentage2:.2f}%")
+            results.append(create_opportunity(
+                opp_type, ex2, ex1, price2, price1, percentage2,
+                exchange1=ex2, exchange2=ex1, price1=price2, price2=price1
+            ))
+            
+        return results
+    
+    def create_spot_futures_opportunity(ex1: str, ex2: str, spot_price: float, futures_price: float) -> Optional[Dict]:
+        """Process spot to futures arbitrage opportunity"""
+        percentage = calc_percentage(spot_price, futures_price)
+        logger.debug(f"CEX Spot->Futures {ex1}->{ex2}: {format_price(spot_price)}->{format_price(futures_price)} = {percentage:.2f}%")
+        
+        if percentage >= min_arbitrage_percentage and should_include_opportunity_type("cross_exchange_spot_futures", filter_mode):
+            logger.info(f"Found CEX Spot->Futures opportunity: {ex1}->{ex2} with {percentage:.2f}%")
+            return create_opportunity(
+                'cross_exchange_spot_futures', ex1, ex2, spot_price, futures_price, percentage,
+                spot_exchange=ex1, futures_exchange=ex2, spot_price=spot_price, futures_price=futures_price
+            )
+        return None
+    
+    def create_futures_spot_opportunity(ex1: str, ex2: str, futures_price: float, spot_price: float) -> Optional[Dict]:
+        """Process futures to spot arbitrage opportunity"""
+        percentage = calc_percentage(futures_price, spot_price)
+        logger.debug(f"CEX Futures->Spot {ex1}->{ex2}: {format_price(futures_price)}->{format_price(spot_price)} = {percentage:.2f}%")
+        
+        if percentage >= min_arbitrage_percentage and should_include_opportunity_type("cross_exchange_futures_spot", filter_mode):
+            logger.info(f"Found CEX Futures->Spot opportunity: {ex1}->{ex2} with {percentage:.2f}%")
+            return create_opportunity(
+                'cross_exchange_futures_spot', ex1, ex2, futures_price, spot_price, percentage,
+                futures_exchange=ex1, spot_exchange=ex2, futures_price=futures_price, spot_price=spot_price
+            )
+        return None
+    
+    def create_same_exchange_opportunity(ex: str, spot_price: float, futures_price: float) -> Optional[Dict]:
+        """Process same-exchange spot to futures arbitrage opportunity"""
+        percentage = calc_percentage(spot_price, futures_price)
+        logger.debug(f"Same CEX Spot->Futures {ex}: {format_price(spot_price)}->{format_price(futures_price)} = {percentage:.2f}%")
+        
+        if percentage >= min_arbitrage_percentage and should_include_opportunity_type("same_exchange_spot_futures", filter_mode):
+            logger.info(f"Found same-exchange Spot->Futures opportunity on {ex} with {percentage:.2f}%")
+            return create_opportunity(
+                'same_exchange_spot_futures', ex, ex, spot_price, futures_price, percentage,
+                exchange=ex, spot_price=spot_price, futures_price=futures_price
+            )
+        return None
+    
+    # Main function implementation begins here
     opportunities = []
     exchanges = [ex for ex in prices.keys() if not prices[ex].get('is_dex', False)]
     dex_chains = [ex for ex in prices.keys() if prices[ex].get('is_dex', False)]
@@ -182,12 +334,8 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
     logger.info(f"Found CEX exchanges: {exchanges}")
     logger.info(f"Filter mode: {filter_mode}")
     
-    # Helper function to calculate percentage difference
-    def calc_percentage(buy_price: float, sell_price: float) -> float:
-        return ((sell_price - buy_price) / buy_price) * 100
-    
-    # Compare DEX to CEX opportunities (only if not in CEX-only mode)
-    if filter_mode == "all" or filter_mode == "cex_dex_only" or filter_mode == "future":
+    # Process DEX to CEX opportunities
+    if should_include_opportunity_type("dex_to_cex_spot", filter_mode) or should_include_opportunity_type("dex_to_cex_futures", filter_mode):
         for dex in dex_chains:
             dex_price = prices[dex]['spot']  # DEX only has spot price
             if not dex_price:
@@ -197,239 +345,70 @@ async def calculate_arbitrage(prices: Dict[str, Dict[str, Optional[float]]], min
             logger.info(f"Processing DEX {dex} with price ${format_price(dex_price)}")
             
             for ex in exchanges:
-                logger.debug(f"Comparing with CEX {ex}")
                 # DEX to CEX Spot
-                if prices[ex]['spot'] and filter_mode != "future":
+                if prices[ex]['spot'] and should_include_opportunity_type("dex_to_cex_spot", filter_mode):
                     cex_spot_price = prices[ex]['spot']
-                    spread = abs(cex_spot_price - dex_price)
                     
                     # Check DEX -> CEX opportunity
-                    dex_to_cex_percentage = calc_percentage(dex_price, cex_spot_price)
-                    logger.debug(f"DEX->CEX Spot: {dex}->{ex}: {format_price(dex_price)}->{format_price(cex_spot_price)} = {dex_to_cex_percentage:.2f}%")
+                    opportunity = create_dex_cex_opportunity("dex_to_cex_spot", dex, ex, dex_price, cex_spot_price)
+                    if opportunity:
+                        opportunities.append(opportunity)
                     
                     # Check CEX -> DEX opportunity
-                    cex_to_dex_percentage = calc_percentage(cex_spot_price, dex_price)
-                    logger.debug(f"CEX->DEX Spot: {ex}->{dex}: {format_price(cex_spot_price)}->{format_price(dex_price)} = {cex_to_dex_percentage:.2f}%")
-                    
-                    # Add DEX -> CEX opportunity if profitable
-                    if dex_to_cex_percentage >= min_arbitrage_percentage:
-                        logger.info(f"Found DEX->CEX Spot opportunity with {dex_to_cex_percentage:.2f}%")
-                        # Skip adding spot opportunities in future mode (double check)
-                        if filter_mode != "future":
-                            opportunities.append({
-                                'type': 'dex_to_cex_spot',
-                                'dex': dex,
-                                'cex': ex,
-                                'dex_price': dex_price,
-                                'cex_price': cex_spot_price,
-                                'spread': spread,
-                                'percentage': dex_to_cex_percentage
-                            })
-                        else:
-                            logger.info(f"Skipping DEX->CEX Spot opportunity in future mode")
-                    
-                    # Add CEX -> DEX opportunity if profitable
-                    if cex_to_dex_percentage >= min_arbitrage_percentage:
-                        logger.info(f"Found CEX->DEX Spot opportunity with {cex_to_dex_percentage:.2f}%")
-                        # Skip adding spot opportunities in future mode (double check)
-                        if filter_mode != "future":
-                            opportunities.append({
-                                'type': 'cex_to_dex_spot',
-                                'dex': dex,
-                                'cex': ex,
-                                'dex_price': dex_price,
-                                'cex_price': cex_spot_price,
-                                'spread': spread,
-                                'percentage': cex_to_dex_percentage
-                            })
-                        else:
-                            logger.info(f"Skipping CEX->DEX Spot opportunity in future mode")
+                    opportunity = create_dex_cex_opportunity("cex_to_dex_spot", dex, ex, dex_price, cex_spot_price)
+                    if opportunity:
+                        opportunities.append(opportunity)
                 
                 # DEX to CEX Futures
-                if prices[ex]['futures'] and (filter_mode == "all" or filter_mode == "future" or filter_mode == "cex_dex_only"):
+                if prices[ex]['futures'] and should_include_opportunity_type("dex_to_cex_futures", filter_mode):
                     cex_futures_price = prices[ex]['futures']
-                    spread = abs(cex_futures_price - dex_price)
                     
                     # Check DEX -> CEX Futures opportunity
-                    dex_to_cex_percentage = calc_percentage(dex_price, cex_futures_price)
-                    logger.debug(f"DEX->CEX Futures: {dex}->{ex}: {format_price(dex_price)}->{format_price(cex_futures_price)} = {dex_to_cex_percentage:.2f}%")
+                    opportunity = create_dex_cex_opportunity("dex_to_cex_futures", dex, ex, dex_price, cex_futures_price)
+                    if opportunity:
+                        opportunities.append(opportunity)
                     
                     # Check CEX -> DEX Futures opportunity
-                    cex_to_dex_percentage = calc_percentage(cex_futures_price, dex_price)
-                    logger.debug(f"CEX->DEX Futures: {ex}->{dex}: {format_price(cex_futures_price)}->{format_price(dex_price)} = {cex_to_dex_percentage:.2f}%")
-                    
-                    # Add DEX -> CEX Futures opportunity if profitable
-                    if dex_to_cex_percentage >= min_arbitrage_percentage:
-                        logger.info(f"Found DEX->CEX Futures opportunity with {dex_to_cex_percentage:.2f}%")
-                        opportunities.append({
-                            'type': 'dex_to_cex_futures',
-                            'dex': dex,
-                            'cex': ex,
-                            'dex_price': dex_price,
-                            'cex_price': cex_futures_price,
-                            'spread': spread,
-                            'percentage': dex_to_cex_percentage
-                        })
-                    
-                    # Add CEX -> DEX Futures opportunity if profitable
-                    if cex_to_dex_percentage >= min_arbitrage_percentage:
-                        logger.info(f"Found CEX->DEX Futures opportunity with {cex_to_dex_percentage:.2f}%")
-                        opportunities.append({
-                            'type': 'cex_to_dex_futures',
-                            'dex': dex,
-                            'cex': ex,
-                            'dex_price': dex_price,
-                            'cex_price': cex_futures_price,
-                            'spread': spread,
-                            'percentage': cex_to_dex_percentage
-                        })
+                    opportunity = create_dex_cex_opportunity("cex_to_dex_futures", dex, ex, dex_price, cex_futures_price)
+                    if opportunity:
+                        opportunities.append(opportunity)
     
-    # Compare all CEX combinations
-    for i in range(len(exchanges)):
-        # Skip CEX-CEX comparisons when in CEX-DEX only mode
-        if filter_mode == "cex_dex_only":
-            break
-            
-        for j in range(len(exchanges)):
-            if i != j:
-                ex1, ex2 = exchanges[i], exchanges[j]
-                
-                # SPOT to SPOT between exchanges - Skip in future mode
-                if prices[ex1]['spot'] and prices[ex2]['spot'] and filter_mode != "future":
-                    price1, price2 = prices[ex1]['spot'], prices[ex2]['spot']
-                    spread = abs(price2 - price1)
+    # Compare all CEX combinations (skip if in CEX-DEX only mode)
+    if filter_mode != "cex_dex_only":
+        for i in range(len(exchanges)):
+            for j in range(len(exchanges)):
+                if i != j:
+                    ex1, ex2 = exchanges[i], exchanges[j]
                     
-                    # Check both directions
-                    percentage1 = calc_percentage(price1, price2)
-                    percentage2 = calc_percentage(price2, price1)
+                    # SPOT to SPOT between exchanges
+                    if prices[ex1]['spot'] and prices[ex2]['spot'] and filter_mode != "future":
+                        opportunities.extend(create_cross_exchange_opportunity("Spot", ex1, ex2, 
+                                                                             prices[ex1]['spot'], 
+                                                                             prices[ex2]['spot']))
                     
-                    logger.debug(f"CEX Spot {ex1}->{ex2}: {format_price(price1)}->{format_price(price2)} = {percentage1:.2f}%")
-                    logger.debug(f"CEX Spot {ex2}->{ex1}: {format_price(price2)}->{format_price(price1)} = {percentage2:.2f}%")
+                    # FUTURES to FUTURES between exchanges
+                    if prices[ex1]['futures'] and prices[ex2]['futures'] and (filter_mode == "all" or filter_mode == "future"):
+                        opportunities.extend(create_cross_exchange_opportunity("Futures", ex1, ex2, 
+                                                                             prices[ex1]['futures'], 
+                                                                             prices[ex2]['futures']))
                     
-                    # Add opportunity if profitable in either direction
-                    if percentage1 >= min_arbitrage_percentage:
-                        logger.info(f"Found CEX->CEX Spot opportunity: {ex1}->{ex2} with {percentage1:.2f}%")
-                        opportunities.append({
-                            'type': 'cross_exchange_spot',
-                            'exchange1': ex1,
-                            'exchange2': ex2,
-                            'price1': price1,
-                            'price2': price2,
-                            'spread': spread,
-                            'percentage': percentage1
-                        })
-                    if percentage2 >= min_arbitrage_percentage:
-                        logger.info(f"Found CEX->CEX Spot opportunity: {ex2}->{ex1} with {percentage2:.2f}%")
-                        opportunities.append({
-                            'type': 'cross_exchange_spot',
-                            'exchange1': ex2,
-                            'exchange2': ex1,
-                            'price1': price2,
-                            'price2': price1,
-                            'spread': spread,
-                            'percentage': percentage2
-                        })
-                
-                # FUTURES to FUTURES between exchanges - Allow in future mode
-                if prices[ex1]['futures'] and prices[ex2]['futures'] and (filter_mode == "all" or filter_mode == "future"):
-                    price1, price2 = prices[ex1]['futures'], prices[ex2]['futures']
-                    spread = abs(price2 - price1)
+                    # SPOT to FUTURES between exchanges
+                    if prices[ex1]['spot'] and prices[ex2]['futures'] and filter_mode == "all":
+                        opportunity = create_spot_futures_opportunity(ex1, ex2, prices[ex1]['spot'], prices[ex2]['futures'])
+                        if opportunity:
+                            opportunities.append(opportunity)
                     
-                    # Check both directions
-                    percentage1 = calc_percentage(price1, price2)
-                    percentage2 = calc_percentage(price2, price1)
+                    # FUTURES to SPOT between exchanges
+                    if prices[ex1]['futures'] and prices[ex2]['spot'] and filter_mode != "future":
+                        opportunity = create_futures_spot_opportunity(ex1, ex2, prices[ex1]['futures'], prices[ex2]['spot'])
+                        if opportunity:
+                            opportunities.append(opportunity)
                     
-                    logger.debug(f"CEX Futures {ex1}->{ex2}: {format_price(price1)}->{format_price(price2)} = {percentage1:.2f}%")
-                    logger.debug(f"CEX Futures {ex2}->{ex1}: {format_price(price2)}->{format_price(price1)} = {percentage2:.2f}%")
-                    
-                    # Add opportunity if profitable in either direction
-                    if percentage1 >= min_arbitrage_percentage:
-                        logger.info(f"Found CEX->CEX Futures opportunity: {ex1}->{ex2} with {percentage1:.2f}%")
-                        opportunities.append({
-                            'type': 'cross_exchange_futures',
-                            'exchange1': ex1,
-                            'exchange2': ex2,
-                            'price1': price1,
-                            'price2': price2,
-                            'spread': spread,
-                            'percentage': percentage1
-                        })
-                    if percentage2 >= min_arbitrage_percentage:
-                        logger.info(f"Found CEX->CEX Futures opportunity: {ex2}->{ex1} with {percentage2:.2f}%")
-                        opportunities.append({
-                            'type': 'cross_exchange_futures',
-                            'exchange1': ex2,
-                            'exchange2': ex1,
-                            'price1': price2,
-                            'price2': price1,
-                            'spread': spread,
-                            'percentage': percentage2
-                        })
-                
-                # SPOT to FUTURES between exchanges - Only in all mode
-                if prices[ex1]['spot'] and prices[ex2]['futures'] and filter_mode == "all":
-                    spot_price = prices[ex1]['spot']
-                    futures_price = prices[ex2]['futures']
-                    spread = abs(futures_price - spot_price)
-                    
-                    # Calculate percentage
-                    percentage = calc_percentage(spot_price, futures_price)
-                    logger.debug(f"CEX Spot->Futures {ex1}->{ex2}: {format_price(spot_price)}->{format_price(futures_price)} = {percentage:.2f}%")
-                    
-                    if percentage >= min_arbitrage_percentage:
-                        logger.info(f"Found CEX Spot->Futures opportunity: {ex1}->{ex2} with {percentage:.2f}%")
-                        opportunities.append({
-                            'type': 'cross_exchange_spot_futures',
-                            'spot_exchange': ex1,
-                            'futures_exchange': ex2,
-                            'spot_price': spot_price,
-                            'futures_price': futures_price,
-                            'spread': spread,
-                            'percentage': percentage
-                        })
-                
-                # FUTURES to SPOT between exchanges - Skip in future mode
-                if prices[ex1]['futures'] and prices[ex2]['spot'] and filter_mode != "future":
-                    futures_price = prices[ex1]['futures']
-                    spot_price = prices[ex2]['spot']
-                    spread = abs(spot_price - futures_price)
-                    
-                    # Calculate percentage
-                    percentage = calc_percentage(futures_price, spot_price)
-                    logger.debug(f"CEX Futures->Spot {ex1}->{ex2}: {format_price(futures_price)}->{format_price(spot_price)} = {percentage:.2f}%")
-                    
-                    if percentage >= min_arbitrage_percentage:
-                        logger.info(f"Found CEX Futures->Spot opportunity: {ex1}->{ex2} with {percentage:.2f}%")
-                        opportunities.append({
-                            'type': 'cross_exchange_futures_spot',
-                            'futures_exchange': ex1,
-                            'spot_exchange': ex2,
-                            'futures_price': futures_price,
-                            'spot_price': spot_price,
-                            'spread': spread,
-                            'percentage': percentage
-                        })
-                
-                # SPOT to FUTURES within same exchange - Only in all mode
-                if prices[ex1]['spot'] and prices[ex1]['futures'] and filter_mode == "all":
-                    spot_price = prices[ex1]['spot']
-                    futures_price = prices[ex1]['futures']
-                    spread = abs(futures_price - spot_price)
-                    
-                    # Calculate percentage
-                    percentage = calc_percentage(spot_price, futures_price)
-                    logger.debug(f"Same CEX Spot->Futures {ex1}: {format_price(spot_price)}->{format_price(futures_price)} = {percentage:.2f}%")
-                    
-                    if percentage >= min_arbitrage_percentage:
-                        logger.info(f"Found same-exchange Spot->Futures opportunity on {ex1} with {percentage:.2f}%")
-                        opportunities.append({
-                            'type': 'same_exchange_spot_futures',
-                            'exchange': ex1,
-                            'spot_price': spot_price,
-                            'futures_price': futures_price,
-                            'spread': spread,
-                            'percentage': percentage
-                        })
+                    # SPOT to FUTURES within same exchange
+                    if prices[ex1]['spot'] and prices[ex1]['futures'] and filter_mode == "all":
+                        opportunity = create_same_exchange_opportunity(ex1, prices[ex1]['spot'], prices[ex1]['futures'])
+                        if opportunity:
+                            opportunities.append(opportunity)
     
     return sorted(opportunities, key=lambda x: x['percentage'], reverse=True)
 
@@ -499,7 +478,7 @@ def format_arbitrage_opportunities(opportunities: List[Dict]) -> str:
     result.append("</pre>")
     return "\n".join(result)
 
-async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0.1, network: str = None, pool_address: str = None, query_id: str = None, filter_mode: str = None):
+async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0.1, network: str = None, pool_address: str = None, query_id: str = None, filter_mode: str = None, enforce_deposit_withdrawal_checks: bool = False):
     """Background task to monitor prices and detect arbitrage opportunities"""
     try:
         # Use provided filter_mode first, if not provided check user_queries
@@ -524,8 +503,22 @@ async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage
             
         logger.info(f"Using validated filter mode: {filter_mode} for {query} (ID: {query_id})")
         
-        price_monitor = ArbitragePriceMonitor(query, bot, min_arbitrage_percentage, filter_mode, network, pool_address, query_id)
-        await price_monitor.start_monitoring()
+        # Initialize the price monitor
+        monitor = ArbitragePriceMonitor(
+            chat_id,
+            query,
+            bot,
+            min_arbitrage_percentage,
+            filter_mode,
+            network,
+            pool_address,
+            query_id
+        )
+        
+        # Set deposit/withdrawal checks flag
+        monitor.enforce_deposit_withdrawal_checks = enforce_deposit_withdrawal_checks
+        
+        await monitor.start_monitoring()
     except asyncio.CancelledError:
         logger.info(f"Monitoring stopped for {query} (ID: {query_id})")
     except Exception as e:
@@ -535,10 +528,10 @@ async def monitor_prices(chat_id: int, query: str, bot, min_arbitrage_percentage
         await bot.send_message(alert_group_id, f"❌ Error in price monitoring for {query} (ID: {query_id}): {str(e)}", message_thread_id=topic_id, parse_mode="HTML", disable_web_page_preview=True)
 
 class ArbitragePriceMonitor:
-    """Class for monitoring prices and detecting arbitrage opportunities"""
+    """Class to monitor prices and detect arbitrage opportunities"""
     
-    def __init__(self, query: str, bot, min_arbitrage_percentage: float = 0.1, filter_mode: str = "all", 
-                 network: str = None, pool_address: str = None, query_id: str = None):
+    def __init__(self, chat_id: int, query: str, bot, min_arbitrage_percentage: float = 0, filter_mode: str = None,
+                 network: str = None, pool_address: str = None, query_id: str = None, enforce_deposit_withdrawal_checks: bool = False):
         self.query = query
         self.bot = bot
         self.min_arbitrage_percentage = min_arbitrage_percentage
@@ -550,6 +543,8 @@ class ArbitragePriceMonitor:
         self.filter_mode = filter_mode  # "all", "cex_only", "cex_dex_only", or "future"
         self.network = network  # Network for DEX operations (e.g., 'Ethereum', 'BSC')
         self.pool_address = pool_address  # Pool address for DEX operations
+        # Flag to control deposit/withdrawal feasibility checks
+        self.enforce_deposit_withdrawal_checks = enforce_deposit_withdrawal_checks
         logger.info(f"ArbitragePriceMonitor initialized with filter_mode: {self.filter_mode}")
         if self.network and self.pool_address:
             logger.info(f"DEX parameters provided - Network: {self.network}, Pool Address: {self.pool_address}")
@@ -867,6 +862,13 @@ class ArbitragePriceMonitor:
                     logger.debug(f"Filtering out non-CEX-DEX opportunity in cex_dex_only mode: {opp['type']}")
                     continue
                 
+            # NOTE: Opportunity feasibility check based on deposit/withdrawal status
+            # This functionality is currently a placeholder and will be configurable in the future
+            is_feasible = await self._check_opportunity_feasibility(opp)
+            if not is_feasible:
+                logger.info(f"Filtering out opportunity {opp['type']} due to deposit/withdrawal constraints")
+                continue
+                
             # Add opportunity to significant list
             significant_opportunities.append(opp)
             
@@ -1012,6 +1014,9 @@ class ArbitragePriceMonitor:
                     availability_info = await self._get_deposit_withdrawal_status(opp)
                     if availability_info:
                         alert_msg += f"\n📡 Deposit/withdrawal status:\n{availability_info}"
+                    
+                    # Remove additional explanation text about feasibility
+                    # When filtering is enabled, we'll simply not show infeasible opportunities
                     
                     return alert_msg
             else:
@@ -1296,6 +1301,176 @@ class ArbitragePriceMonitor:
             
         return f"https://www.dextools.io/app/en/{chain}/pair-explorer/{pool_address}"
 
+    async def _check_opportunity_feasibility(self, opp: Dict) -> bool:
+        """
+        Check if an arbitrage opportunity is feasible based on deposit/withdrawal status
+        
+        This is currently a placeholder function that will be configurable in the future.
+        For now, it returns True for all opportunities but logs the feasibility information.
+        
+        Rules:
+        1. For spot-to-spot arbitrage between exchanges:
+           - Source exchange must have withdrawals open
+           - Target exchange must have deposits open
+        2. For futures-related arbitrage:
+           - Always feasible (ignore deposit/withdrawal status)
+        """
+        try:
+            # If checks are not enforced, always return True
+            if not self.enforce_deposit_withdrawal_checks:
+                return True
+                
+            # For futures-related opportunities, always consider feasible
+            if (opp['type'] == 'cross_exchange_futures' or 
+                opp['type'] == 'dex_to_cex_futures' or 
+                opp['type'] == 'cex_to_dex_futures' or
+                'futures' in opp['type']):
+                logger.debug(f"Futures-related opportunity {opp['type']} is considered feasible regardless of deposit/withdrawal status")
+                return True
+                
+            # For spot opportunities, check deposit/withdrawal status
+            if opp['type'] == 'cross_exchange_spot':
+                # Get involved exchanges
+                source_exchange = opp['exchange1']
+                target_exchange = opp['exchange2']
+                
+                # Log what we would check in the future
+                logger.debug(
+                    f"Checking: {source_exchange} withdrawals open AND "
+                    f"{target_exchange} deposits open for opportunity {opp['type']}"
+                )
+                
+                # Check arbitrage path feasibility
+                if self.enforce_deposit_withdrawal_checks:
+                    is_feasible = await self._is_arbitrage_path_feasible(source_exchange, target_exchange)
+                    return is_feasible
+                
+            elif opp['type'] == 'dex_to_cex_spot':
+                # Only need to check if target CEX has deposits open
+                target_exchange = opp['cex']
+                logger.debug(f"Checking: {target_exchange} deposits open for opportunity {opp['type']}")
+                
+                # Check if deposits are open
+                if self.enforce_deposit_withdrawal_checks:
+                    is_deposit_open = await self._check_exchange_deposit_status(target_exchange)
+                    return is_deposit_open
+                
+            elif opp['type'] == 'cex_to_dex_spot':
+                # Only need to check if source CEX has withdrawals open
+                source_exchange = opp['cex']
+                logger.debug(f"Checking: {source_exchange} withdrawals open for opportunity {opp['type']}")
+                
+                # Check if withdrawals are open
+                if self.enforce_deposit_withdrawal_checks:
+                    is_withdrawal_open = await self._check_exchange_withdrawal_status(source_exchange)
+                    return is_withdrawal_open
+            
+            # Return True for now to maintain existing functionality
+            # This method will be configurable in the future
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking opportunity feasibility: {str(e)}", exc_info=True)
+            # In case of error, return True to maintain existing functionality
+            return True
+
+    async def _is_arbitrage_path_feasible(self, source_exchange: str, target_exchange: str) -> bool:
+        """
+        Check if an arbitrage path between two exchanges is feasible
+        
+        Args:
+            source_exchange: Exchange to buy from and withdraw tokens
+            target_exchange: Exchange to deposit tokens and sell
+            
+        Returns:
+            True if path is feasible (source withdrawals open AND target deposits open)
+        """
+        try:
+            # If checks are not enforced, always return True
+            if not self.enforce_deposit_withdrawal_checks:
+                return True
+                
+            # Get withdrawal status from source exchange
+            source_withdrawal_open = await self._check_exchange_withdrawal_status(source_exchange)
+            
+            # Get deposit status for target exchange
+            target_deposit_open = await self._check_exchange_deposit_status(target_exchange)
+            
+            # For the path to be feasible, both conditions must be met
+            path_feasible = source_withdrawal_open and target_deposit_open
+            
+            logger.info(
+                f"Arbitrage path feasibility: {source_exchange} -> {target_exchange} = {path_feasible} "
+                f"(Withdrawals: {source_withdrawal_open}, Deposits: {target_deposit_open})"
+            )
+            
+            # If checks are enforced, return the actual feasibility
+            if self.enforce_deposit_withdrawal_checks:
+                return path_feasible
+                
+            # Otherwise, always return True to maintain existing functionality
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking arbitrage path feasibility: {str(e)}", exc_info=True)
+            return True  # Return True on error to maintain existing functionality
+    
+    async def _check_exchange_withdrawal_status(self, exchange: str) -> bool:
+        """
+        Check if withdrawals are open for a token on a specific exchange
+        
+        Args:
+            exchange: Exchange name to check
+            
+        Returns:
+            True if withdrawals are open, False otherwise
+        """
+        try:
+            # Get exchange client
+            client = exchange_service._get_exchange_client(exchange)
+            
+            # Check token availability
+            availability = await client.check_token_availability(self.query)
+            
+            # Check withdrawal status
+            withdrawal_open = availability.get('withdrawal', False)
+            
+            logger.debug(f"Withdrawal status for {self.query} on {exchange}: {withdrawal_open}")
+            
+            return withdrawal_open
+            
+        except Exception as e:
+            logger.error(f"Error checking withdrawal status for {exchange}: {str(e)}", exc_info=True)
+            return True  # Return True on error to maintain existing functionality
+    
+    async def _check_exchange_deposit_status(self, exchange: str) -> bool:
+        """
+        Check if deposits are open for a token on a specific exchange
+        
+        Args:
+            exchange: Exchange name to check
+            
+        Returns:
+            True if deposits are open, False otherwise
+        """
+        try:
+            # Get exchange client
+            client = exchange_service._get_exchange_client(exchange)
+            
+            # Check token availability
+            availability = await client.check_token_availability(self.query)
+            
+            # Check deposit status
+            deposit_open = availability.get('deposit', False)
+            
+            logger.debug(f"Deposit status for {self.query} on {exchange}: {deposit_open}")
+            
+            return deposit_open
+            
+        except Exception as e:
+            logger.error(f"Error checking deposit status for {exchange}: {str(e)}", exc_info=True)
+            return True  # Return True on error to maintain existing functionality
+
 @router.message(Command("stop"))
 async def cmd_stop(message: Message):
     """Stop monitoring for the chat"""
@@ -1494,7 +1669,8 @@ async def handle_min_percentage(message: Message):
             query_info.get('network'), 
             query_info.get('pool_address'), 
             query_id,
-            filter_mode  # Pass the filter_mode explicitly
+            query_info.get('filter_mode'),  # Pass the filter_mode
+            query_info.get('enforce_deposit_withdrawal_checks', False)  # Pass the deposit check setting
         ))
         active_monitors[chat_id] = {query_id: task}
         
@@ -1607,7 +1783,8 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
                 query_info.get('network'), 
                 query_info.get('pool_address'), 
                 query_id,
-                filter_mode  # Pass the filter_mode explicitly
+                query_info.get('filter_mode'),  # Pass the filter_mode
+                query_info.get('enforce_deposit_withdrawal_checks', False)  # Pass the deposit check setting
             )
         )
         
@@ -1813,7 +1990,9 @@ async def cmd_set_min_percentage(message: Message):
                     min_percentage, 
                     query_info.get('network'), 
                     query_info.get('pool_address'), 
-                    query_id
+                    query_id,
+                    query_info.get('filter_mode'),
+                    query_info.get('enforce_deposit_withdrawal_checks', False)
                 )
             )
             
