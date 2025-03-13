@@ -128,7 +128,6 @@ async def handle_filter_mode_callback(callback: CallbackQuery):
     # Check if user is admin
     if user_id not in ConfigManager.get_admin_user_ids():
         logger.warning(f"Non-admin user {user_id} attempted to change filter settings")
-        await callback.answer("Only admins can change filter settings", show_alert=True)
         return
     
     # Check if user has an active setup
